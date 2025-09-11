@@ -20,6 +20,7 @@ import Credit from "@/pages/credit";
 import Payments from "@/pages/payments";
 import Settings from "@/pages/settings";
 import SuperAdmin from "@/pages/super-admin";
+import Help from "@/pages/help";
 import NotFound from "@/pages/not-found";
 import MainLayout from "@/components/layout/main-layout";
 
@@ -70,6 +71,7 @@ function Router() {
         <Route path="/payments" component={Payments} />
         <Route path="/settings" component={Settings} />
         <Route path="/super-admin" component={SuperAdmin} />
+        <Route path="/help" component={Help} />
         <Route path="/" component={() => <Redirect to="/dashboard" />} />
         <Route component={NotFound} />
       </Switch>
