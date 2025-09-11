@@ -58,7 +58,11 @@ function Router() {
   // Show main application with all routes for authenticated users with selected tenant
   return (
     <Switch>
-      <Route path="/" component={Home} />
+      <Route path="/">
+        <MainLayout>
+          <Dashboard />
+        </MainLayout>
+      </Route>
       <Route path="/dashboard">
         <MainLayout>
           <Dashboard />
