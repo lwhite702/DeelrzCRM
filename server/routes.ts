@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
+import { Router } from "express";
 import { storage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
 import { z } from "zod";
@@ -77,7 +78,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Tenant routes
+  // Tenant management routes (not tenant-scoped)
   app.get("/api/tenants", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
@@ -116,7 +117,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Feature flag routes
+  // Global feature flag routes (not tenant-scoped)
   app.get("/api/feature-flags", isAuthenticated, async (req: any, res) => {
     try {
       const flags = await storage.getFeatureFlags();
@@ -127,7 +128,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/tenants/:tenantId/feature-flags", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+  // Create tenant router with centralized authorization
+  const tenantRouter = Router({ mergeParams: true });
+  
+  // Apply global middleware to ALL tenant routes
+  app.use('/api/tenants/:tenantId', isAuthenticated, requireTenantAccess, tenantRouter);
+
+  // Feature flag routes (tenant-scoped)
+  tenantRouter.get("/feature-flags", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       const flags = await storage.getTenantFeatureFlags(tenantId);
@@ -138,7 +146,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/tenants/:tenantId/feature-flags", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+  tenantRouter.post("/feature-flags", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       const { flagKey, enabled } = req.body;
@@ -146,6 +154,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!flagKey || typeof enabled !== 'boolean') {
         return res.status(400).json({ 
           message: "Invalid request: flagKey and enabled boolean are required" 
+        });
+      }
+      
+      // Validate that the flagKey exists in the featureFlags table
+      const allFlags = await storage.getFeatureFlags();
+      const flagExists = allFlags.some(flag => flag.key === flagKey);
+      
+      if (!flagExists) {
+        return res.status(400).json({ 
+          message: `Invalid flagKey: '${flagKey}' does not exist in the system` 
         });
       }
       
@@ -165,7 +183,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Product routes (Inventory module)
-  app.get("/api/tenants/:tenantId/products", isAuthenticated, async (req: any, res) => {
+  tenantRouter.get("/products", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       const withInventory = req.query.with_inventory === 'true';
@@ -183,7 +201,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/tenants/:tenantId/products", isAuthenticated, async (req: any, res) => {
+  tenantRouter.post("/products", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       const productData = insertProductSchema.parse({
@@ -199,7 +217,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Customer routes
-  app.get("/api/tenants/:tenantId/customers", isAuthenticated, async (req: any, res) => {
+  tenantRouter.get("/customers", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       const withDetails = req.query.with_details === 'true';
@@ -217,7 +235,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/tenants/:tenantId/customers", isAuthenticated, async (req: any, res) => {
+  tenantRouter.post("/customers", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       const customerData = insertCustomerSchema.parse({
@@ -233,7 +251,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Order routes (Sales module)
-  app.get("/api/tenants/:tenantId/orders", isAuthenticated, async (req: any, res) => {
+  tenantRouter.get("/orders", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       const orders = await storage.getOrders(tenantId);
@@ -244,7 +262,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/tenants/:tenantId/orders", isAuthenticated, async (req: any, res) => {
+  tenantRouter.post("/orders", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       const userId = req.user.claims.sub;
@@ -262,7 +280,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Dashboard KPIs
-  app.get("/api/tenants/:tenantId/dashboard/kpis", isAuthenticated, async (req: any, res) => {
+  tenantRouter.get("/dashboard/kpis", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       const kpis = await storage.getDashboardKPIs(tenantId);
@@ -274,9 +292,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Sales POS calculators
-  app.post("/api/orders/assist/qty-to-price", isAuthenticated, async (req: any, res) => {
+  tenantRouter.post("/orders/assist/qty-to-price", async (req: any, res) => {
     try {
-      const { productId, quantity, tenantId } = req.body;
+      const { tenantId } = req.params;
+      const { productId, quantity } = req.body;
       
       const product = await storage.getProduct(productId, tenantId);
       if (!product) {
@@ -311,9 +330,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/orders/assist/amount-to-qty", isAuthenticated, async (req: any, res) => {
+  tenantRouter.post("/orders/assist/amount-to-qty", async (req: any, res) => {
     try {
-      const { productId, targetAmount, tenantId } = req.body;
+      const { tenantId } = req.params;
+      const { productId, targetAmount } = req.body;
       
       const product = await storage.getProduct(productId, tenantId);
       if (!product) {
@@ -352,9 +372,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Delivery fee estimation
-  app.post("/api/delivery/estimate", isAuthenticated, async (req: any, res) => {
+  tenantRouter.post("/delivery/estimate", async (req: any, res) => {
     try {
-      const { tenantId, pickupLat, pickupLon, dropoffLat, dropoffLon } = req.body;
+      const { tenantId } = req.params;
+      const { pickupLat, pickupLon, dropoffLat, dropoffLon } = req.body;
       
       // Simplified distance calculation (would use proper geocoding service)
       const distance = Math.sqrt(
@@ -378,7 +399,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Tenant settings routes
-  app.get("/api/tenants/:tenantId/settings", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+  tenantRouter.get("/settings", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       let settings = await storage.getTenantSettings(tenantId);
@@ -395,7 +416,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/tenants/:tenantId/settings", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+  tenantRouter.put("/settings", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       
@@ -424,7 +445,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Loyalty accounts routes
-  app.get("/api/tenants/:tenantId/loyalty", isAuthenticated, async (req: any, res) => {
+  tenantRouter.get("/loyalty", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       let loyaltyAccounts = await storage.getLoyaltyAccounts(tenantId);
@@ -443,7 +464,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Credit accounts routes
-  app.get("/api/tenants/:tenantId/credit", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+  tenantRouter.get("/credit", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       let creditAccounts = await storage.getCreditAccounts(tenantId);
@@ -461,7 +482,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/tenants/:tenantId/credit", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+  tenantRouter.post("/credit", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       
@@ -499,7 +520,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Credit transactions routes
-  app.get("/api/tenants/:tenantId/credit-transactions", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+  tenantRouter.get("/credit-transactions", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       const creditTransactions = await storage.getCreditTransactions(tenantId);
@@ -510,7 +531,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/tenants/:tenantId/credit-transactions", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+  tenantRouter.post("/credit-transactions", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       
@@ -552,7 +573,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Update credit balance
-  app.put("/api/tenants/:tenantId/credit/:creditId/balance", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+  tenantRouter.put("/credit/:creditId/balance", async (req: any, res) => {
     try {
       const { tenantId, creditId } = req.params;
       const { balance } = req.body;
@@ -602,7 +623,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Payment routes
-  app.get("/api/tenants/:tenantId/payments", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+  tenantRouter.get("/payments", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       const payments = await storage.getPayments(tenantId);
@@ -613,7 +634,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/tenants/:tenantId/payments/statistics", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+  tenantRouter.get("/payments/statistics", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       const statistics = await storage.getPaymentStatistics(tenantId);
@@ -624,7 +645,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/tenants/:tenantId/payments/settings", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+  tenantRouter.get("/payments/settings", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       const settings = await storage.getPaymentSettings(tenantId);
@@ -635,7 +656,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/tenants/:tenantId/payments", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+  tenantRouter.post("/payments", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       const userId = req.user.claims.sub;
@@ -666,7 +687,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/tenants/:tenantId/payments/:paymentId/status", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+  tenantRouter.put("/payments/:paymentId/status", async (req: any, res) => {
     try {
       const { tenantId, paymentId } = req.params;
       const { status, metadata } = req.body;
@@ -696,7 +717,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/tenants/:tenantId/payments/seed", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+  tenantRouter.post("/payments/seed", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       await storage.seedPaymentsForTenant(tenantId);
@@ -713,7 +734,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Stripe payment processing routes
-  app.post("/api/tenants/:tenantId/create-payment-intent", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+  tenantRouter.post("/create-payment-intent", async (req: any, res) => {
     try {
       if (!STRIPE_ENABLED || !stripe) {
         return res.status(503).json({ 
@@ -791,7 +812,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/tenants/:tenantId/confirm-payment", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+  tenantRouter.post("/confirm-payment", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       const { paymentIntentId, status, chargeId, failureReason } = req.body;
