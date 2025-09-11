@@ -97,6 +97,9 @@ export interface IStorage {
   
   // Settings
   getTenantSettings(tenantId: string): Promise<TenantSettings | undefined>;
+  createTenantSettings(tenantId: string, settings: Partial<TenantSettings>): Promise<TenantSettings>;
+  updateTenantSettings(tenantId: string, settings: Partial<TenantSettings>): Promise<TenantSettings>;
+  seedTenantSettings(tenantId: string): Promise<TenantSettings>;
   
   // Loyalty
   getLoyaltyAccounts(tenantId: string): Promise<(LoyaltyAccount & { customerName: string })[]>;
@@ -498,6 +501,41 @@ export class DatabaseStorage implements IStorage {
       .from(settingsTenant)
       .where(eq(settingsTenant.tenantId, tenantId));
     return settings;
+  }
+
+  async createTenantSettings(tenantId: string, settings: Partial<TenantSettings>): Promise<TenantSettings> {
+    const [newSettings] = await db
+      .insert(settingsTenant)
+      .values({ ...settings, tenantId })
+      .returning();
+    return newSettings;
+  }
+
+  async updateTenantSettings(tenantId: string, settings: Partial<TenantSettings>): Promise<TenantSettings> {
+    const [updatedSettings] = await db
+      .update(settingsTenant)
+      .set(settings)
+      .where(eq(settingsTenant.tenantId, tenantId))
+      .returning();
+    return updatedSettings;
+  }
+
+  async seedTenantSettings(tenantId: string): Promise<TenantSettings> {
+    // Create default settings for a new tenant
+    const defaultSettings = {
+      tenantId,
+      targetMargin: "0.3000",
+      minStockThreshold: 10,
+      exposureCap: "10000.00",
+      deliveryMethodsEnabled: "pickup,manual_courier",
+      leadTimeDays: 7,
+      safetyDays: 3,
+      paymentMode: "platform" as const,
+      applicationFeeBps: 0,
+      defaultCurrency: "usd",
+    };
+
+    return this.createTenantSettings(tenantId, defaultSettings);
   }
 
   // Loyalty

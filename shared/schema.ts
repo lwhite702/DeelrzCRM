@@ -505,3 +505,7 @@ export const insertPaymentSchema = createInsertSchema(payments).omit({
   createdAt: true,
   updatedAt: true,
 });
+
+export const insertTenantSettingsSchema = createInsertSchema(settingsTenant).omit({
+  tenantId: true, // Will be provided by route parameter
+});

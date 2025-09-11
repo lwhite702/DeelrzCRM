@@ -12,6 +12,7 @@ import {
   insertCreditSchema,
   insertCreditTransactionSchema,
   insertPaymentSchema,
+  insertTenantSettingsSchema,
   batches,
   products,
 } from "@shared/schema";
@@ -126,7 +127,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/tenants/:tenantId/feature-flags", isAuthenticated, async (req: any, res) => {
+  app.get("/api/tenants/:tenantId/feature-flags", isAuthenticated, requireTenantAccess, async (req: any, res) => {
     try {
       const { tenantId } = req.params;
       const flags = await storage.getTenantFeatureFlags(tenantId);
@@ -134,6 +135,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching tenant feature flags:", error);
       res.status(500).json({ message: "Failed to fetch tenant feature flags" });
+    }
+  });
+
+  app.post("/api/tenants/:tenantId/feature-flags", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const { flagKey, enabled } = req.body;
+      
+      if (!flagKey || typeof enabled !== 'boolean') {
+        return res.status(400).json({ 
+          message: "Invalid request: flagKey and enabled boolean are required" 
+        });
+      }
+      
+      const override = await storage.updateFeatureFlagOverride({
+        tenantId,
+        flagKey,
+        enabled,
+      });
+      
+      // Return updated flags for the tenant
+      const updatedFlags = await storage.getTenantFeatureFlags(tenantId);
+      res.json(updatedFlags);
+    } catch (error) {
+      console.error("Error updating feature flag override:", error);
+      res.status(500).json({ message: "Failed to update feature flag" });
     }
   });
 
@@ -351,10 +378,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Tenant settings routes
-  app.get("/api/tenants/:tenantId/settings", isAuthenticated, async (req: any, res) => {
+  app.get("/api/tenants/:tenantId/settings", isAuthenticated, requireTenantAccess, async (req: any, res) => {
     try {
       const { tenantId } = req.params;
-      const settings = await storage.getTenantSettings(tenantId);
+      let settings = await storage.getTenantSettings(tenantId);
+      
+      // Lazy backfill for dev/test environments - seed if empty
+      if (!settings && process.env.NODE_ENV !== 'production') {
+        settings = await storage.seedTenantSettings(tenantId);
+      }
+      
       res.json(settings);
     } catch (error) {
       console.error("Error fetching tenant settings:", error);
@@ -362,12 +395,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/tenants/:tenantId/settings", isAuthenticated, async (req: any, res) => {
+  app.put("/api/tenants/:tenantId/settings", isAuthenticated, requireTenantAccess, async (req: any, res) => {
     try {
       const { tenantId } = req.params;
-      // For now, just return success - full implementation would update database
-      res.json({ message: "Settings updated successfully" });
+      
+      // Validate request body
+      const validatedSettings = insertTenantSettingsSchema.parse(req.body);
+      
+      // Check if settings exist, if not create them
+      let settings = await storage.getTenantSettings(tenantId);
+      if (!settings) {
+        settings = await storage.createTenantSettings(tenantId, validatedSettings);
+      } else {
+        settings = await storage.updateTenantSettings(tenantId, validatedSettings);
+      }
+      
+      res.json(settings);
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Invalid settings data", 
+          errors: error.errors 
+        });
+      }
       console.error("Error updating tenant settings:", error);
       res.status(500).json({ message: "Failed to update tenant settings" });
     }

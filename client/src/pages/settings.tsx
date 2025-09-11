@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -30,49 +30,62 @@ interface TenantSettings {
   stripeAccountId?: string;
 }
 
-const defaultSettings: Partial<TenantSettings> = {
-  targetMargin: "0.3000",
-  minStockThreshold: 10,
-  exposureCap: "10000.00",
-  deliveryMethodsEnabled: "pickup,manual_courier",
-  leadTimeDays: 7,
-  safetyDays: 3,
-  paymentMode: "platform",
-  applicationFeeBps: 0,
-  defaultCurrency: "usd",
-};
-
 export default function Settings() {
   const { currentTenant } = useTenant();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const [settings, setSettings] = useState<Partial<TenantSettings>>(defaultSettings);
   const [activeTab, setActiveTab] = useState("general");
+  const [localSettings, setLocalSettings] = useState<Partial<TenantSettings>>({});
 
-  const { data: featureFlags } = useFeatureFlags(currentTenant);
+  const { data: featureFlags, isLoading: flagsLoading } = useFeatureFlags(currentTenant);
 
   const { data: tenantSettings, isLoading } = useQuery<TenantSettings>({
     queryKey: ["/api/tenants", currentTenant, "settings"],
     enabled: !!currentTenant,
   });
 
-  // Update settings when data is fetched
-  if (tenantSettings && settings === defaultSettings) {
-    setSettings(tenantSettings);
-  }
+  // Update local settings when real data is fetched
+  useEffect(() => {
+    if (tenantSettings) {
+      setLocalSettings(tenantSettings);
+    }
+  }, [tenantSettings]);
 
   const updateSettingsMutation = useMutation({
     mutationFn: async (updatedSettings: Partial<TenantSettings>) => {
       const res = await apiRequest("PUT", `/api/tenants/${currentTenant}/settings`, updatedSettings);
       return await res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       toast({
         title: "Settings Updated",
         description: "Your pharmacy settings have been saved successfully.",
       });
       queryClient.invalidateQueries({ queryKey: ["/api/tenants", currentTenant, "settings"] });
+      // Update local state with the returned data
+      setLocalSettings(data);
+    },
+    onError: (error) => {
+      toast({
+        title: "Update Failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const updateFeatureFlagMutation = useMutation({
+    mutationFn: async (data: { flagKey: string; enabled: boolean }) => {
+      const res = await apiRequest("POST", `/api/tenants/${currentTenant}/feature-flags`, data);
+      return await res.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Feature Flag Updated",
+        description: "Feature flag setting has been updated successfully.",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/tenants", currentTenant, "feature-flags"] });
     },
     onError: (error) => {
       toast({
@@ -84,14 +97,18 @@ export default function Settings() {
   });
 
   const handleSettingChange = (key: keyof TenantSettings, value: any) => {
-    setSettings(prev => ({ ...prev, [key]: value }));
+    setLocalSettings(prev => ({ ...prev, [key]: value }));
   };
 
   const handleSave = () => {
-    updateSettingsMutation.mutate(settings);
+    updateSettingsMutation.mutate(localSettings);
   };
 
-  if (isLoading) {
+  const handleFeatureFlagToggle = (flagKey: string, enabled: boolean) => {
+    updateFeatureFlagMutation.mutate({ flagKey, enabled });
+  };
+
+  if (isLoading || flagsLoading) {
     return (
       <MainLayout>
         <div className="p-4 sm:p-6 lg:p-8">
@@ -144,7 +161,7 @@ export default function Settings() {
                       step="0.01"
                       min="0"
                       max="1"
-                      value={parseFloat(settings.targetMargin || "0") * 100}
+                      value={parseFloat(localSettings.targetMargin || "0") * 100}
                       onChange={(e) => handleSettingChange("targetMargin", (parseFloat(e.target.value) / 100).toString())}
                       data-testid="input-target-margin"
                     />
@@ -162,7 +179,7 @@ export default function Settings() {
                       type="number"
                       step="0.01"
                       min="0"
-                      value={settings.exposureCap}
+                      value={localSettings.exposureCap || ""}
                       onChange={(e) => handleSettingChange("exposureCap", e.target.value)}
                       data-testid="input-exposure-cap"
                     />
@@ -176,7 +193,7 @@ export default function Settings() {
                       Default Currency
                     </Label>
                     <Select 
-                      value={settings.defaultCurrency} 
+                      value={localSettings.defaultCurrency || ""} 
                       onValueChange={(value) => handleSettingChange("defaultCurrency", value)}
                     >
                       <SelectTrigger data-testid="select-default-currency">
@@ -209,7 +226,7 @@ export default function Settings() {
                       id="min-stock-threshold"
                       type="number"
                       min="0"
-                      value={settings.minStockThreshold}
+                      value={localSettings.minStockThreshold || ""}
                       onChange={(e) => handleSettingChange("minStockThreshold", parseInt(e.target.value))}
                       data-testid="input-min-stock-threshold"
                     />
@@ -226,7 +243,7 @@ export default function Settings() {
                       id="lead-time-days"
                       type="number"
                       min="0"
-                      value={settings.leadTimeDays}
+                      value={localSettings.leadTimeDays || ""}
                       onChange={(e) => handleSettingChange("leadTimeDays", parseInt(e.target.value))}
                       data-testid="input-lead-time-days"
                     />
@@ -243,7 +260,7 @@ export default function Settings() {
                       id="safety-days"
                       type="number"
                       min="0"
-                      value={settings.safetyDays}
+                      value={localSettings.safetyDays || ""}
                       onChange={(e) => handleSettingChange("safetyDays", parseInt(e.target.value))}
                       data-testid="input-safety-days"
                     />
@@ -298,9 +315,9 @@ export default function Settings() {
                           <p className="text-xs text-muted-foreground">Customer picks up from pharmacy</p>
                         </div>
                         <Switch 
-                          checked={settings.deliveryMethodsEnabled?.includes("pickup")}
+                          checked={localSettings.deliveryMethodsEnabled?.includes("pickup") || false}
                           onCheckedChange={(checked) => {
-                            const methods = settings.deliveryMethodsEnabled?.split(",") || [];
+                            const methods = localSettings.deliveryMethodsEnabled?.split(",") || [];
                             if (checked && !methods.includes("pickup")) {
                               methods.push("pickup");
                             } else if (!checked) {
@@ -317,9 +334,9 @@ export default function Settings() {
                           <p className="text-xs text-muted-foreground">Staff or third-party delivery</p>
                         </div>
                         <Switch 
-                          checked={settings.deliveryMethodsEnabled?.includes("manual_courier")}
+                          checked={localSettings.deliveryMethodsEnabled?.includes("manual_courier") || false}
                           onCheckedChange={(checked) => {
-                            const methods = settings.deliveryMethodsEnabled?.split(",") || [];
+                            const methods = localSettings.deliveryMethodsEnabled?.split(",") || [];
                             if (checked && !methods.includes("manual_courier")) {
                               methods.push("manual_courier");
                             } else if (!checked) {
@@ -337,7 +354,7 @@ export default function Settings() {
                     <Label className="text-sm font-medium text-foreground">Delivery Zone Profile</Label>
                     <Textarea
                       placeholder="Enter delivery zone configuration (JSON format)"
-                      value={settings.cityProfile ? JSON.stringify(settings.cityProfile, null, 2) : ""}
+                      value={localSettings.cityProfile ? JSON.stringify(localSettings.cityProfile, null, 2) : ""}
                       onChange={(e) => {
                         try {
                           const parsed = JSON.parse(e.target.value);
@@ -368,7 +385,7 @@ export default function Settings() {
                   <div>
                     <Label className="text-sm font-medium text-foreground">Payment Mode</Label>
                     <Select 
-                      value={settings.paymentMode} 
+                      value={localSettings.paymentMode || ""} 
                       onValueChange={(value) => handleSettingChange("paymentMode", value)}
                     >
                       <SelectTrigger className="mt-2" data-testid="select-payment-mode">
@@ -381,24 +398,24 @@ export default function Settings() {
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground mt-1">
-                      {settings.paymentMode === "platform" 
+                      {localSettings.paymentMode === "platform" 
                         ? "Process payments through platform account with shared fees"
                         : "Connect your own Stripe account for direct processing"
                       }
                     </p>
                   </div>
 
-                  {settings.paymentMode !== "platform" && (
+                  {localSettings.paymentMode !== "platform" && (
                     <>
                       <div>
                         <Label className="text-sm font-medium text-foreground">Stripe Account</Label>
                         <div className="mt-2 p-3 bg-muted/50 border border-border rounded-lg">
-                          {settings.stripeAccountId ? (
+                          {localSettings.stripeAccountId ? (
                             <div className="flex items-center justify-between">
                               <div>
                                 <p className="text-sm font-medium text-foreground">Connected</p>
                                 <p className="text-xs text-muted-foreground font-mono">
-                                  {settings.stripeAccountId}
+                                  {localSettings.stripeAccountId}
                                 </p>
                               </div>
                               <Button variant="outline" size="sm">
@@ -431,7 +448,7 @@ export default function Settings() {
                           step="0.01"
                           min="0"
                           max="10"
-                          value={(settings.applicationFeeBps || 0) / 100}
+                          value={(localSettings.applicationFeeBps || 0) / 100}
                           onChange={(e) => handleSettingChange("applicationFeeBps", parseFloat(e.target.value) * 100)}
                           data-testid="input-application-fee"
                         />
@@ -508,7 +525,8 @@ export default function Settings() {
                         </div>
                         <Switch 
                           checked={enabled}
-                          disabled={flagKey === "dashboard"} // Dashboard should always be enabled
+                          disabled={flagKey === "dashboard" || updateFeatureFlagMutation.isPending} // Dashboard should always be enabled
+                          onCheckedChange={(checked) => handleFeatureFlagToggle(flagKey, checked)}
                           data-testid={`switch-feature-${flagKey}`}
                         />
                       </div>
