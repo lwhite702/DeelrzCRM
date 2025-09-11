@@ -24,6 +24,7 @@ app.use(helmet({
         "https://replit.com",
         "https://*.replit.com",
         "https://*.replit.dev",
+        "https://js.stripe.com",
         "data:",
         "blob:"
       ],
@@ -33,7 +34,7 @@ app.use(helmet({
       fontSrc: ["'self'", "data:", "https:"],
       objectSrc: ["'none'"],
       mediaSrc: ["'self'"],
-      frameSrc: ["'none'"]
+      frameSrc: ["'none'", "https://js.stripe.com"]
     }
   },
   crossOriginEmbedderPolicy: false
