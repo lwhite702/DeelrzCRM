@@ -1,0 +1,58 @@
+You are my senior engineer. Apply the following changes to complete the app while keeping everything production-ready and minimally disruptive.
+
+1) SECURITY MIDDLEWARE (server/index.ts)
+- Add helmet, compression, CORS with whitelist from env REPLIT_DOMAINS (comma-separated) + http://localhost:5173 and current origin in dev.
+- Add express-rate-limit (global basic limiter; e.g., 100 req/15min/ip).
+- Set app.set('trust proxy', 1).
+- Add express.json({ limit: '1mb' }).
+- Add a final error-handling middleware that returns safe JSON.
+
+2) PAYMENTS – CONFIRM + WEBHOOK (server/routes.ts)
+- Implement: POST /api/tenants/:tenantId/confirm-payment
+  * Zod.strict(): { paymentIntentId: string, paymentId: string }
+  * Fetch PaymentIntent from Stripe; set DB payment.status = 'succeeded' or 'failed' accordingly (idempotent if already final).
+  * Return updated row.
+- Implement: POST /api/stripe/webhook
+  * Verify signature using WEBHOOK_SECRET.
+  * Idempotency: store processed event id in a small table; ignore duplicates.
+  * On payment_intent.succeeded / payment_intent.payment_failed, find matching `payments` row by paymentIntentId and update status and charge_id if available.
+  * On account.updated (Connect), refresh tenant payouts/charges cache fields in settings if present.
+
+3) DELIVERY ESTIMATOR (server/routes.ts)
+- Implement: POST /api/delivery/estimate
+  * Zod.strict() input:
+    {
+      method: "pickup" | "manual_courier",
+      pickup: { lat?: number, lon?: number, address?: string },
+      dropoff: { lat?: number, lon?: number, address?: string },
+      weightKg?: number,
+      priority?: "standard" | "rush"
+    }
+  * If method === "pickup": return { distance: "0 mi", estimatedMinutes: 0, fee: "0.00" }.
+  * Else:
+    - If coords present: compute haversine distance (miles).
+    - Estimate minutes = max(5, distanceMiles / 20 * 60). (20 mph urban baseline)
+    - Load tenant city profile from settings_tenant or default: base=4.00, perMile=1.50, perMin=0.25, minFee=7.00.
+    - fee = max(minFee, base + perMile*distance + perMin*minutes). Round to 2 decimals; return as string.
+  * Return { distance: "X.Y mi", estimatedMinutes: n, fee: "nn.nn" }.
+
+4) CLIENT – PAYMENTS FORM (client/src/components/payment-form.tsx)
+- After `stripe.confirmPayment(...)`, call `/api/tenants/${tenantId}/confirm-payment` with `{ paymentIntentId, paymentId }`.
+- On success: show success toast, invalidate `/payments` query, close modal if `onSuccess` provided.
+- On error: show destructive toast; preserve user input.
+
+5) CLIENT – DELIVERY PAGE (client/src/pages/delivery.tsx)
+- Ensure it posts to `/api/delivery/estimate` (current code does).
+- Render fee + ETA; show errors in a banner; preserve inputs.
+
+6) CORS / ORIGINS
+- Parse REPLIT_DOMAINS into an array; include http://localhost:5173 in dev.
+- Plug into CORS middleware with `{ origin: (origin, cb) => whitelist.includes(origin) || !origin ? cb(null, true) : cb(new Error('Not allowed')) }`.
+
+7) TESTS / VERIFICATION
+- Add a minimal test or script to:
+  * Create payment intent (platform), confirm payment via confirm endpoint (mock PaymentIntent retrieval), assert DB status transition.
+  * Call delivery estimate with example coords → validate fee/ETA shape.
+- Run: pnpm install; pnpm check; pnpm build; pnpm start (or dev) and verify Payments & Delivery UIs now work end-to-end.
+
+Keep TypeScript strict, reuse existing storage layer patterns and `drizzle-zod` style. Do not alter schema beyond adding a small `webhook_events` table for idempotency if needed.

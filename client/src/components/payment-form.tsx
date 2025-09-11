@@ -146,25 +146,18 @@ export function PaymentForm({
       });
 
       if (error) {
-        // Handle payment error
+        // Handle payment error - don't call backend, just show error to user
         toast({
           title: "Payment Failed",
           description: error.message || "Payment processing failed",
           variant: "destructive",
         });
-        
-        // Confirm payment failure in backend
-        confirmPaymentMutation.mutate({
-          paymentIntentId: paymentIntentData.paymentIntentId,
-          status: "failed",
-          failureReason: error.message,
-        });
       } else if (paymentIntent) {
-        // Payment succeeded
+        // Payment completed (succeeded or requires_action, etc.)
+        // Call backend to confirm and sync the payment status
         confirmPaymentMutation.mutate({
           paymentIntentId: paymentIntent.id,
-          status: paymentIntent.status === "succeeded" ? "completed" : "pending",
-          chargeId: (paymentIntent as any).charges?.data[0]?.id,
+          paymentId: paymentIntentData.paymentId,
         });
       }
     } catch (error: any) {

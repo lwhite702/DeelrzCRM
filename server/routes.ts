@@ -814,33 +814,52 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   tenantRouter.post("/confirm-payment", async (req: any, res) => {
     try {
-      const { tenantId } = req.params;
-      const { paymentIntentId, status, chargeId, failureReason } = req.body;
-
-      if (!paymentIntentId) {
-        return res.status(400).json({ message: "Payment intent ID is required" });
+      if (!STRIPE_ENABLED || !stripe) {
+        return res.status(503).json({ 
+          message: "Stripe payment processing is not configured." 
+        });
       }
+
+      const { tenantId } = req.params;
+      
+      // Validate input with Zod strict
+      const confirmPaymentSchema = z.object({
+        paymentIntentId: z.string(),
+        paymentId: z.string(),
+      }).strict();
+
+      const { paymentIntentId, paymentId } = confirmPaymentSchema.parse(req.body);
 
       // Find the payment record
       const payments = await storage.getPayments(tenantId);
-      const payment = payments.find(p => p.paymentIntentId === paymentIntentId);
+      const payment = payments.find(p => p.id === paymentId && p.paymentIntentId === paymentIntentId);
 
       if (!payment) {
         return res.status(404).json({ message: "Payment not found" });
       }
 
-      // Update payment status based on result
-      const updateData: any = {
-        status: status || "completed",
-      };
-
-      if (chargeId) {
-        updateData.chargeId = chargeId;
+      // If payment is already in a final state, return it (idempotent)
+      if (payment.status === "completed" || payment.status === "failed" || payment.status === "refunded") {
+        return res.json(payment);
       }
 
-      if (failureReason) {
-        updateData.failureReason = failureReason;
+      // Fetch PaymentIntent from Stripe to get current status
+      const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+
+      // Update payment status based on Stripe status
+      let updateData: any = {
+        status: "pending", // default
+      };
+
+      if (paymentIntent.status === "succeeded") {
+        updateData.status = "completed";
+        // Get charge ID from the payment intent
+        if (paymentIntent.charges && paymentIntent.charges.data.length > 0) {
+          updateData.chargeId = paymentIntent.charges.data[0].id;
+        }
+      } else if (paymentIntent.status === "payment_failed" || paymentIntent.status === "canceled") {
         updateData.status = "failed";
+        updateData.failureReason = paymentIntent.last_payment_error?.message || "Payment failed";
       }
 
       const updatedPayment = await storage.updatePaymentStatus(
@@ -853,6 +872,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(updatedPayment);
     } catch (error: any) {
       console.error("Error confirming payment:", error);
+      
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          message: "Invalid request data", 
+          errors: error.errors 
+        });
+      }
+      
       res.status(500).json({ 
         message: "Error confirming payment", 
         error: error.message 
@@ -924,6 +951,191 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("Error processing refund:", error);
       res.status(500).json({ 
         message: "Error processing refund", 
+        error: error.message 
+      });
+    }
+  });
+
+  // Stripe Webhook endpoint
+  app.post("/api/stripe/webhook", express.raw({ type: 'application/json' }), async (req: any, res) => {
+    try {
+      if (!STRIPE_ENABLED || !stripe) {
+        return res.status(503).json({ 
+          message: "Stripe webhook processing is not configured." 
+        });
+      }
+
+      const sig = req.headers['stripe-signature'];
+      const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+      if (!webhookSecret) {
+        return res.status(500).json({ message: "Webhook secret not configured" });
+      }
+
+      let event;
+      try {
+        event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+      } catch (err: any) {
+        console.error('Webhook signature verification failed:', err.message);
+        return res.status(400).json({ message: `Webhook Error: ${err.message}` });
+      }
+
+      // Check for idempotency - prevent duplicate processing
+      const existingEvent = await db.select().from(webhookEvents).where(eq(webhookEvents.eventId, event.id)).limit(1);
+      
+      if (existingEvent.length > 0 && existingEvent[0].processed) {
+        console.log(`Event ${event.id} already processed, skipping`);
+        return res.json({ received: true, skipped: true });
+      }
+
+      // Store event for idempotency tracking
+      if (existingEvent.length === 0) {
+        await db.insert(webhookEvents).values({
+          eventId: event.id,
+          eventType: event.type,
+          processed: false,
+          metadata: event.data,
+        });
+      }
+
+      // Process the event
+      try {
+        switch (event.type) {
+          case 'payment_intent.succeeded':
+          case 'payment_intent.payment_failed': {
+            const paymentIntent = event.data.object as any;
+            const tenantId = paymentIntent.metadata?.tenantId;
+            
+            if (tenantId) {
+              // Find payment by paymentIntentId
+              const payments = await storage.getPayments(tenantId);
+              const payment = payments.find(p => p.paymentIntentId === paymentIntent.id);
+              
+              if (payment) {
+                const updateData: any = {
+                  status: event.type === 'payment_intent.succeeded' ? 'completed' : 'failed',
+                };
+                
+                if (event.type === 'payment_intent.succeeded' && paymentIntent.charges?.data?.[0]) {
+                  updateData.chargeId = paymentIntent.charges.data[0].id;
+                } else if (event.type === 'payment_intent.payment_failed') {
+                  updateData.failureReason = paymentIntent.last_payment_error?.message || 'Payment failed';
+                }
+                
+                await storage.updatePaymentStatus(payment.id, tenantId, updateData.status, updateData);
+                console.log(`Updated payment ${payment.id} status to ${updateData.status}`);
+              }
+            }
+            break;
+          }
+          
+          case 'account.updated': {
+            // Handle Connect account updates - refresh tenant settings cache if needed
+            const account = event.data.object as any;
+            console.log(`Stripe account ${account.id} updated - would refresh tenant cache`);
+            break;
+          }
+          
+          default:
+            console.log(`Unhandled event type: ${event.type}`);
+        }
+
+        // Mark event as processed
+        await db.update(webhookEvents)
+          .set({ processed: true })
+          .where(eq(webhookEvents.eventId, event.id));
+
+        res.json({ received: true });
+      } catch (processingError: any) {
+        console.error('Error processing webhook event:', processingError);
+        res.status(500).json({ message: 'Error processing webhook event' });
+      }
+    } catch (error: any) {
+      console.error('Webhook error:', error);
+      res.status(500).json({ message: 'Webhook processing failed' });
+    }
+  });
+
+  // Delivery Estimator endpoint
+  app.post("/api/delivery/estimate", async (req: any, res) => {
+    try {
+      // Zod validation
+      const deliveryEstimateSchema = z.object({
+        method: z.enum(["pickup", "manual_courier"]),
+        pickup: z.object({
+          lat: z.number().optional(),
+          lon: z.number().optional(),
+          address: z.string().optional(),
+        }).optional(),
+        dropoff: z.object({
+          lat: z.number().optional(),
+          lon: z.number().optional(),
+          address: z.string().optional(),
+        }).optional(),
+        weightKg: z.number().optional(),
+        priority: z.enum(["standard", "rush"]).optional(),
+      }).strict();
+
+      const { method, pickup, dropoff, weightKg, priority } = deliveryEstimateSchema.parse(req.body);
+
+      // Handle pickup method
+      if (method === "pickup") {
+        return res.json({
+          distance: "0 mi",
+          estimatedMinutes: 0,
+          fee: "0.00"
+        });
+      }
+
+      // For manual_courier method, calculate distance and fee
+      if (!pickup?.lat || !pickup?.lon || !dropoff?.lat || !dropoff?.lon) {
+        return res.status(400).json({ 
+          message: "Pickup and dropoff coordinates are required for delivery estimation" 
+        });
+      }
+
+      // Haversine distance calculation
+      function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+        const R = 3959; // Earth's radius in miles
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                  Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        return R * c;
+      }
+
+      const distanceMiles = haversineDistance(pickup.lat, pickup.lon, dropoff.lat, dropoff.lon);
+      
+      // Estimate delivery time: max(5 minutes, distance / 20 mph * 60)
+      const estimatedMinutes = Math.max(5, Math.ceil(distanceMiles / 20 * 60));
+      
+      // Calculate fee - base fee + distance fee + priority surcharge
+      let baseFee = 3.99; // Base delivery fee
+      const distanceFee = distanceMiles * 0.89; // Per mile fee
+      const prioritySurcharge = priority === "rush" ? 2.50 : 0;
+      const weightSurcharge = weightKg && weightKg > 5 ? (weightKg - 5) * 0.25 : 0;
+      
+      const totalFee = baseFee + distanceFee + prioritySurcharge + weightSurcharge;
+
+      res.json({
+        distance: `${distanceMiles.toFixed(1)} mi`,
+        estimatedMinutes,
+        fee: totalFee.toFixed(2)
+      });
+    } catch (error: any) {
+      console.error('Error estimating delivery:', error);
+      
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          message: "Invalid request data", 
+          errors: error.errors 
+        });
+      }
+      
+      res.status(500).json({ 
+        message: "Error estimating delivery", 
         error: error.message 
       });
     }

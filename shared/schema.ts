@@ -340,6 +340,20 @@ export const payments = pgTable("payments", {
   index("idx_payments_intent").on(table.paymentIntentId),
 ]);
 
+// Webhook Events (for idempotency tracking)
+export const webhookEvents = pgTable("webhook_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  eventId: varchar("event_id").notNull().unique(), // Stripe event ID for idempotency
+  eventType: varchar("event_type").notNull(),
+  processed: boolean("processed").notNull().default(false),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("idx_webhook_events_event_id").on(table.eventId),
+  index("idx_webhook_events_type").on(table.eventType),
+  index("idx_webhook_events_processed").on(table.processed),
+]);
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   usersTenants: many(usersTenants),
@@ -461,6 +475,8 @@ export type Payment = typeof payments.$inferSelect;
 export type InsertPayment = typeof payments.$inferInsert;
 export type TenantSettings = typeof settingsTenant.$inferSelect;
 export type InsertTenantSettings = typeof settingsTenant.$inferInsert;
+export type WebhookEvent = typeof webhookEvents.$inferSelect;
+export type InsertWebhookEvent = typeof webhookEvents.$inferInsert;
 
 // Zod schemas
 export const insertUserSchema = createInsertSchema(users).omit({
@@ -508,4 +524,9 @@ export const insertPaymentSchema = createInsertSchema(payments).omit({
 
 export const insertTenantSettingsSchema = createInsertSchema(settingsTenant).omit({
   tenantId: true, // Will be provided by route parameter
+});
+
+export const insertWebhookEventSchema = createInsertSchema(webhookEvents).omit({
+  id: true,
+  createdAt: true,
 });

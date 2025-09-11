@@ -1,10 +1,68 @@
 import express, { type Request, Response, NextFunction } from "express";
+import helmet from "helmet";
+import compression from "compression";
+import cors from "cors";
+import rateLimit from "express-rate-limit";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
 const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+
+// Trust proxy for accurate client IPs
+app.set('trust proxy', 1);
+
+// Security middleware
+app.use(helmet());
+app.use(compression());
+
+// CORS configuration
+const isProduction = process.env.NODE_ENV === 'production';
+const allowedOrigins = (() => {
+  const origins = ['http://localhost:5173']; // Always allow local dev
+  
+  if (process.env.REPLIT_DOMAINS) {
+    const replitDomains = process.env.REPLIT_DOMAINS.split(',').map(domain => domain.trim());
+    origins.push(...replitDomains);
+  }
+  
+  // Add current Replit app domain if available
+  if (process.env.REPL_SLUG && process.env.REPL_OWNER) {
+    origins.push(`https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`);
+  }
+  
+  return origins;
+})();
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+}));
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: {
+    error: 'Too many requests from this IP, please try again later.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use(limiter);
+
+// Body parsing with size limits
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 
 app.use((req, res, next) => {
   const start = Date.now();
