@@ -17,6 +17,7 @@ import {
   insertTenantSettingsSchema,
   insertKbArticleSchema,
   insertKbFeedbackSchema,
+  insertUserSettingsSchema,
   batches,
   products,
   webhookEvents,
@@ -101,6 +102,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching user:", error);
       res.status(500).json({ message: "Failed to fetch user" });
+    }
+  });
+
+  // User settings routes
+  app.get("/api/user/settings", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      let settings = await storage.getUserSettings(userId);
+      
+      // Create default settings if none exist
+      if (!settings) {
+        settings = await storage.upsertUserSettings(userId, {
+          hasCompletedTour: false,
+          tourProgress: null,
+          helpPreferences: null,
+        });
+      }
+      
+      res.json(settings);
+    } catch (error) {
+      console.error("Error fetching user settings:", error);
+      res.status(500).json({ message: "Failed to fetch user settings" });
+    }
+  });
+
+  app.put("/api/user/settings", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const settingsData = insertUserSettingsSchema.parse(req.body);
+      const settings = await storage.upsertUserSettings(userId, settingsData);
+      res.json(settings);
+    } catch (error) {
+      console.error("Error updating user settings:", error);
+      res.status(500).json({ message: "Failed to update user settings" });
     }
   });
 

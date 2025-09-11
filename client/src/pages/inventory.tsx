@@ -137,7 +137,7 @@ export default function Inventory() {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-border">
+                <table className="min-w-full divide-y divide-border" data-testid="products-table">
                   <thead className="bg-muted/50">
                     <tr>
                       <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">

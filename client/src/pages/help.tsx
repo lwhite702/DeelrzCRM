@@ -8,6 +8,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { HelpSearch } from "@/components/help/help-search";
 import { KnowledgeBase } from "@/components/help/knowledge-base";
+import { useTour } from "@/hooks/use-tour";
 import { 
   BookOpen, 
   Search, 
@@ -16,7 +17,9 @@ import {
   ArrowRight,
   HelpCircle,
   MessageSquare,
-  Zap
+  Zap,
+  PlayCircle,
+  RefreshCw
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { KbArticle } from "@shared/schema";
@@ -25,6 +28,16 @@ export default function Help() {
   const [location, setLocation] = useLocation();
   const [selectedArticle, setSelectedArticle] = useState<KbArticle | null>(null);
   const [activeTab, setActiveTab] = useState<"search" | "browse">("search");
+  
+  // Tour management
+  const { 
+    startTour, 
+    resetTour, 
+    hasCompletedTour, 
+    canResumeTour, 
+    resumeTour,
+    isLoading 
+  } = useTour();
 
   // Parse URL parameters for deep linking
   useEffect(() => {
@@ -87,6 +100,14 @@ export default function Help() {
       color: "bg-blue-50 text-blue-600 border-blue-200"
     },
     {
+      title: "Take Guided Tour",
+      description: hasCompletedTour ? "Replay the guided tour to refresh your knowledge" : "Get a step-by-step walkthrough of the system",
+      icon: <PlayCircle className="w-5 h-5" />,
+      action: canResumeTour ? resumeTour : () => startTour(),
+      color: "bg-indigo-50 text-indigo-600 border-indigo-200",
+      isSpecial: true
+    },
+    {
       title: "Inventory Management", 
       description: "How to track and manage your pharmacy inventory",
       icon: <BookOpen className="w-5 h-5" />,
@@ -142,8 +163,12 @@ export default function Help() {
                     item.color
                   )}
                   onClick={() => {
-                    setActiveTab("browse");
-                    setLocation(`/help?tab=browse&category=${item.category}`);
+                    if (item.action) {
+                      item.action();
+                    } else if (item.category) {
+                      setActiveTab("browse");
+                      setLocation(`/help?tab=browse&category=${item.category}`);
+                    }
                   }}
                   data-testid={`card-quick-access-${item.category}`}
                 >
@@ -277,6 +302,65 @@ export default function Help() {
                   </CardContent>
                 </Card>
               )}
+
+              {/* Tour Management */}
+              <Card className="bg-gradient-to-br from-indigo-50 to-blue-50 border-indigo-200">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-lg text-indigo-700">
+                    <PlayCircle className="w-5 h-5" />
+                    Guided Tour
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <p className="text-sm text-indigo-600">
+                    {hasCompletedTour 
+                      ? "You've completed the guided tour! You can replay it anytime to refresh your knowledge."
+                      : "Take a step-by-step walkthrough of the pharmacy management system."
+                    }
+                  </p>
+                  
+                  <div className="space-y-2">
+                    {canResumeTour && (
+                      <Button
+                        size="sm"
+                        className="w-full bg-indigo-600 hover:bg-indigo-700"
+                        onClick={resumeTour}
+                        disabled={isLoading}
+                        data-testid="button-resume-tour"
+                      >
+                        <PlayCircle className="w-4 h-4 mr-2" />
+                        Resume Tour
+                      </Button>
+                    )}
+                    
+                    <Button
+                      variant={hasCompletedTour ? "outline" : "default"}
+                      size="sm"
+                      className="w-full"
+                      onClick={() => startTour()}
+                      disabled={isLoading}
+                      data-testid="button-start-tour"
+                    >
+                      <PlayCircle className="w-4 h-4 mr-2" />
+                      {hasCompletedTour ? "Replay Tour" : "Start Tour"}
+                    </Button>
+                    
+                    {hasCompletedTour && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full text-muted-foreground"
+                        onClick={resetTour}
+                        disabled={isLoading}
+                        data-testid="button-reset-tour"
+                      >
+                        <RefreshCw className="w-4 h-4 mr-2" />
+                        Reset Tour Progress
+                      </Button>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
 
               {/* Help & Support */}
               <Card className="bg-muted/50">

@@ -45,6 +45,9 @@ import {
   type InsertKbArticle,
   type KbFeedback,
   type InsertKbFeedback,
+  userSettings,
+  type UserSettings,
+  type InsertUserSettings,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sql, or, like, ilike, isNull } from "drizzle-orm";
@@ -168,6 +171,10 @@ export interface IStorage {
   // Knowledge Base Feedback
   getKbFeedback(articleId: string, userId: string): Promise<KbFeedback | undefined>;
   upsertKbFeedback(feedback: InsertKbFeedback): Promise<KbFeedback>;
+  
+  // User Settings
+  getUserSettings(userId: string): Promise<UserSettings | undefined>;
+  upsertUserSettings(userId: string, settings: Partial<InsertUserSettings>): Promise<UserSettings>;
   
   // Development/Test Seeding
   seedLoyaltyForTenant(tenantId: string): Promise<void>;
@@ -1271,6 +1278,34 @@ export class DatabaseStorage implements IStorage {
         set: {
           isHelpful: feedback.isHelpful,
           createdAt: new Date(),
+        },
+      })
+      .returning();
+    return result;
+  }
+
+  // User Settings
+  async getUserSettings(userId: string): Promise<UserSettings | undefined> {
+    const [settings] = await db
+      .select()
+      .from(userSettings)
+      .where(eq(userSettings.userId, userId));
+    return settings;
+  }
+
+  async upsertUserSettings(userId: string, settings: Partial<InsertUserSettings>): Promise<UserSettings> {
+    const [result] = await db
+      .insert(userSettings)
+      .values({
+        userId,
+        ...settings,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [userSettings.userId],
+        set: {
+          ...settings,
+          updatedAt: new Date(),
         },
       })
       .returning();

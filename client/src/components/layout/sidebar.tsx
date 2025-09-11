@@ -34,7 +34,7 @@ export default function Sidebar({ tenantId }: SidebarProps) {
   });
 
   return (
-    <nav className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-16 bg-card border-r border-border">
+    <nav className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-16 bg-card border-r border-border" data-testid="sidebar-navigation">
       <div className="flex-1 flex flex-col min-h-0 pt-4 pb-4">
         <div className="flex-1 px-3 space-y-1">
           {filteredNavItems.map((item) => (
@@ -47,7 +47,7 @@ export default function Sidebar({ tenantId }: SidebarProps) {
                   ? "bg-primary/10 text-primary"
                   : "text-muted-foreground hover:bg-accent hover:text-foreground"
               )}
-              data-testid={`link-nav-${item.label.toLowerCase().replace(/\s+/g, '-')}`}
+              data-testid={`nav-${item.label.toLowerCase().replace(/\s+/g, '-').replace(' pos', '')}`}
             >
               <i className={`${item.icon} mr-3 text-base`}></i>
               {item.label}
@@ -68,6 +68,20 @@ export default function Sidebar({ tenantId }: SidebarProps) {
           >
             <i className="fas fa-cog mr-3 text-base"></i>
             Settings
+          </Link>
+          
+          <Link
+            href="/help"
+            className={cn(
+              "group flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors",
+              location === "/help"
+                ? "bg-primary/10 text-primary"
+                : "text-muted-foreground hover:bg-accent hover:text-foreground"
+            )}
+            data-testid="nav-help"
+          >
+            <i className="fas fa-question-circle mr-3 text-base"></i>
+            Help
           </Link>
           
           <Link

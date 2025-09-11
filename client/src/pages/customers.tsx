@@ -122,7 +122,7 @@ export default function Customers() {
                 </Button>
               </div>
             ) : (
-              <div className="divide-y divide-border">
+              <div className="divide-y divide-border" data-testid="customers-table">
                 {customers.map((customer) => (
                   <div 
                     key={customer.id} 
