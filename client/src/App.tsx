@@ -5,7 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { StripeProvider } from "@/components/stripe-provider";
 import { useAuth } from "@/hooks/useAuth";
-import { useTenant } from "@/hooks/use-tenant";
+import { useTenant, TenantProvider } from "@/contexts/tenant-context";
 
 // Pages
 import Landing from "@/pages/landing";
@@ -26,8 +26,6 @@ import MainLayout from "@/components/layout/main-layout";
 function Router() {
   const { isAuthenticated, isLoading } = useAuth();
   const { currentTenant } = useTenant();
-
-  console.log("🚦 Router - isAuthenticated:", isAuthenticated, "currentTenant:", currentTenant);
 
   // Show loading while checking authentication
   if (isLoading) {
@@ -82,12 +80,14 @@ function Router() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <StripeProvider>
-        <TooltipProvider>
-          <Toaster />
-          <Router />
-        </TooltipProvider>
-      </StripeProvider>
+      <TenantProvider>
+        <StripeProvider>
+          <TooltipProvider>
+            <Toaster />
+            <Router />
+          </TooltipProvider>
+        </StripeProvider>
+      </TenantProvider>
     </QueryClientProvider>
   );
 }

@@ -6,6 +6,16 @@ This is a production-ready multi-tenant SaaS application for independent pharmac
 
 Preferred communication style: Simple, everyday language.
 
+# Recent Changes
+
+## 2025-09-11: Critical Navigation Architecture Fix
+- **RESOLVED MAJOR BUG**: Fixed persistent navigation issue where URL changed but content remained stuck on Dashboard
+- **Root Cause**: Multiple `useTenant` hook instances created separate state instances across 15+ components  
+- **Solution**: Migrated from individual `useState` hooks to React Context (`TenantProvider`) for global state sharing
+- **Impact**: All navigation now works correctly - tenant selection properly triggers dashboard navigation
+- **Architecture**: Centralized tenant state management ensures all components share same state instance
+- **Testing**: Comprehensive end-to-end testing confirms complete routing functionality
+
 # System Architecture
 
 ## Technology Stack
@@ -17,6 +27,7 @@ Preferred communication style: Simple, everyday language.
 - **Payment Processing**: Stripe integration for card payments
 - **Routing**: Wouter for client-side routing
 - **State Management**: TanStack Query for server state management
+- **Tenant Context**: React Context for global tenant state management
 
 ## Database Design
 The system uses a multi-tenant PostgreSQL database with strict tenant isolation through Row Level Security (RLS). Key architectural decisions:

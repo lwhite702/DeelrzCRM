@@ -1,13 +1,11 @@
 import { useAuth } from "@/hooks/useAuth";
-import { useTenant } from "@/hooks/use-tenant";
+import { useTenant } from "@/contexts/tenant-context";
 import TenantSelector from "./tenant-selector";
 import Dashboard from "@/pages/dashboard";
 
 export default function Home() {
   const { user } = useAuth();
-  const { currentTenant, selectTenant } = useTenant();
-
-  console.log("🏠 Home component - currentTenant:", currentTenant);
+  const { selectTenant } = useTenant();
 
   if (!user) {
     return (
@@ -18,8 +16,5 @@ export default function Home() {
   }
 
   // Always show tenant selector - if tenant is selected, main routing in App.tsx handles it
-  return <TenantSelector onTenantSelect={(tenantId) => {
-    console.log("🎯 Tenant selected:", tenantId);
-    selectTenant(tenantId);
-  }} />;
+  return <TenantSelector onTenantSelect={selectTenant} />;
 }
