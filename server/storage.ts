@@ -12,6 +12,7 @@ import {
   orderItems,
   loyaltyAccounts,
   credits,
+  creditTransactions,
   settingsTenant,
   deliveries,
   type User,
@@ -31,6 +32,9 @@ import {
   type InsertFeatureFlagOverride,
   type LoyaltyAccount,
   type Credit,
+  type InsertCredit,
+  type CreditTransaction,
+  type InsertCreditTransaction,
   type TenantSettings,
 } from "@shared/schema";
 import { db } from "./db";
@@ -96,6 +100,16 @@ export interface IStorage {
   
   // Credit
   getCreditAccounts(tenantId: string): Promise<(Credit & { customerName: string })[]>;
+  getCreditTransactions(tenantId: string): Promise<Array<CreditTransaction & { 
+    customerName: string;
+    lastPayment?: string;
+    nextDue?: string;
+    overdue?: boolean;
+  }>>;
+  createCredit(credit: InsertCredit): Promise<Credit>;
+  createCreditTransaction(transaction: InsertCreditTransaction): Promise<CreditTransaction>;
+  updateCreditBalance(creditId: string, tenantId: string, newBalance: string): Promise<Credit>;
+  seedCreditForTenant(tenantId: string): Promise<void>;
   
   // Deliveries
   getDeliveries(tenantId: string): Promise<Array<{
@@ -502,6 +516,189 @@ export class DatabaseStorage implements IStorage {
       .where(eq(credits.tenantId, tenantId));
     
     return results as (Credit & { customerName: string })[];
+  }
+
+  async getCreditTransactions(tenantId: string): Promise<Array<CreditTransaction & { 
+    customerName: string;
+    lastPayment?: string;
+    nextDue?: string;
+    overdue?: boolean;
+  }>> {
+    const results = await db
+      .select({
+        id: creditTransactions.id,
+        tenantId: creditTransactions.tenantId,
+        customerId: creditTransactions.customerId,
+        orderId: creditTransactions.orderId,
+        amount: creditTransactions.amount,
+        fee: creditTransactions.fee,
+        dueDate: creditTransactions.dueDate,
+        paidDate: creditTransactions.paidDate,
+        status: creditTransactions.status,
+        createdAt: creditTransactions.createdAt,
+        customerName: customers.name,
+      })
+      .from(creditTransactions)
+      .innerJoin(customers, eq(creditTransactions.customerId, customers.id))
+      .where(eq(creditTransactions.tenantId, tenantId))
+      .orderBy(desc(creditTransactions.createdAt));
+
+    return results.map(r => {
+      const now = new Date();
+      const overdue = r.dueDate && r.status === 'pending' && r.dueDate < now;
+      
+      return {
+        ...r,
+        lastPayment: r.paidDate?.toISOString(),
+        nextDue: r.dueDate?.toISOString(),
+        overdue: Boolean(overdue),
+      };
+    }) as Array<CreditTransaction & { 
+      customerName: string;
+      lastPayment?: string;
+      nextDue?: string;
+      overdue?: boolean;
+    }>;
+  }
+
+  async createCredit(credit: InsertCredit): Promise<Credit> {
+    const [newCredit] = await db.insert(credits).values(credit).returning();
+    return newCredit;
+  }
+
+  async createCreditTransaction(transaction: InsertCreditTransaction): Promise<CreditTransaction> {
+    // Use database transaction for atomicity
+    return await db.transaction(async (tx) => {
+      // Find the customer's credit account
+      const [creditAccount] = await tx
+        .select()
+        .from(credits)
+        .where(
+          and(
+            eq(credits.customerId, transaction.customerId),
+            eq(credits.tenantId, transaction.tenantId)
+          )
+        );
+      
+      if (!creditAccount) {
+        throw new Error(`No credit account found for customer ${transaction.customerId}`);
+      }
+      
+      // Create the transaction
+      const [newTransaction] = await tx.insert(creditTransactions).values(transaction).returning();
+      
+      // Calculate new balance (add transaction amount to current balance)
+      const currentBalance = parseFloat(creditAccount.balance);
+      const transactionAmount = parseFloat(transaction.amount);
+      const newBalance = (currentBalance + transactionAmount).toFixed(2);
+      
+      // Check if new balance exceeds credit limit
+      const creditLimit = parseFloat(creditAccount.limitAmount);
+      if (parseFloat(newBalance) > creditLimit) {
+        throw new Error(`Transaction would exceed credit limit. Current: $${currentBalance.toFixed(2)}, Limit: $${creditLimit.toFixed(2)}, Requested: $${transactionAmount.toFixed(2)}`);
+      }
+      
+      // Update the credit account balance
+      await tx
+        .update(credits)
+        .set({ 
+          balance: newBalance,
+          updatedAt: new Date() 
+        })
+        .where(eq(credits.id, creditAccount.id));
+      
+      return newTransaction;
+    });
+  }
+
+  async updateCreditBalance(creditId: string, tenantId: string, newBalance: string): Promise<Credit> {
+    const [updatedCredit] = await db
+      .update(credits)
+      .set({ 
+        balance: newBalance, 
+        updatedAt: new Date() 
+      })
+      .where(and(eq(credits.id, creditId), eq(credits.tenantId, tenantId)))
+      .returning();
+    return updatedCredit;
+  }
+
+  async seedCreditForTenant(tenantId: string): Promise<void> {
+    // Get existing customers for this tenant
+    const customers = await this.getCustomers(tenantId);
+    
+    if (customers.length === 0) {
+      console.log(`No customers found for tenant ${tenantId}, skipping credit seeding.`);
+      return;
+    }
+
+    // Create credit accounts for some customers
+    const creditData = [
+      {
+        tenantId,
+        customerId: customers[0]?.id,
+        limitAmount: "1000.00",
+        balance: "250.00",
+        status: "active" as const,
+      },
+      {
+        tenantId,
+        customerId: customers[1]?.id,
+        limitAmount: "500.00",
+        balance: "0.00",
+        status: "active" as const,
+      },
+      {
+        tenantId,
+        customerId: customers[2]?.id,
+        limitAmount: "750.00",
+        balance: "450.00",
+        status: "suspended" as const,
+      },
+    ];
+
+    // Filter out any undefined customer IDs and insert credits
+    const validCreditData = creditData.filter(data => data.customerId);
+    if (validCreditData.length > 0) {
+      await db.insert(credits).values(validCreditData).onConflictDoNothing();
+    }
+
+    // Create some credit transactions
+    const transactionData = [
+      {
+        tenantId,
+        customerId: customers[0]?.id,
+        amount: "85.50",
+        fee: "2.50",
+        dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14 days from now
+        status: "pending" as const,
+      },
+      {
+        tenantId,
+        customerId: customers[2]?.id,
+        amount: "120.00",
+        fee: "5.00",
+        dueDate: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000), // 10 days ago (overdue)
+        status: "overdue" as const,
+      },
+      {
+        tenantId,
+        customerId: customers[1]?.id,
+        amount: "45.75",
+        fee: "1.25",
+        dueDate: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), // 3 days ago
+        paidDate: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000), // paid 5 days ago
+        status: "paid" as const,
+      },
+    ];
+
+    // Filter out any undefined customer IDs and insert transactions
+    const validTransactionData = transactionData.filter(data => data.customerId);
+    if (validTransactionData.length > 0) {
+      await db.insert(creditTransactions).values(validTransactionData).onConflictDoNothing();
+    }
+
+    console.log(`Seeded ${validCreditData.length} credit accounts and ${validTransactionData.length} transactions for tenant ${tenantId}`);
   }
 
   // Deliveries

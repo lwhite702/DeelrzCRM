@@ -8,11 +8,40 @@ import {
   insertProductSchema,
   insertCustomerSchema,
   insertOrderSchema,
+  insertCreditSchema,
+  insertCreditTransactionSchema,
   batches,
   products,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, sql } from "drizzle-orm";
+
+// Tenant membership authorization middleware
+const requireTenantAccess = async (req: any, res: any, next: any) => {
+  try {
+    const userId = req.user.claims.sub;
+    const { tenantId } = req.params;
+    
+    if (!tenantId) {
+      return res.status(400).json({ message: "Tenant ID is required" });
+    }
+    
+    // Check if user has access to this tenant
+    const userTenants = await storage.getUserTenants(userId);
+    const hasAccess = userTenants.some(ut => ut.tenantId === tenantId);
+    
+    if (!hasAccess) {
+      return res.status(403).json({ 
+        message: "Access denied: You don't have permission to access this tenant's data" 
+      });
+    }
+    
+    next();
+  } catch (error) {
+    console.error("Tenant authorization error:", error);
+    res.status(500).json({ message: "Authorization check failed" });
+  }
+};
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
@@ -347,14 +376,161 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Credit accounts routes
-  app.get("/api/tenants/:tenantId/credit", isAuthenticated, async (req: any, res) => {
+  app.get("/api/tenants/:tenantId/credit", isAuthenticated, requireTenantAccess, async (req: any, res) => {
     try {
       const { tenantId } = req.params;
-      const creditAccounts = await storage.getCreditAccounts(tenantId);
+      let creditAccounts = await storage.getCreditAccounts(tenantId);
+      
+      // Lazy backfill for dev/test environments - seed if empty
+      if (creditAccounts.length === 0 && process.env.NODE_ENV !== 'production') {
+        await storage.seedCreditForTenant(tenantId);
+        creditAccounts = await storage.getCreditAccounts(tenantId);
+      }
+      
       res.json(creditAccounts);
     } catch (error) {
       console.error("Error fetching credit accounts:", error);
       res.status(500).json({ message: "Failed to fetch credit accounts" });
+    }
+  });
+
+  app.post("/api/tenants/:tenantId/credit", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      
+      // Validate input data
+      const validationResult = insertCreditSchema.safeParse({
+        ...req.body,
+        tenantId,
+      });
+      
+      if (!validationResult.success) {
+        return res.status(400).json({
+          message: "Invalid credit account data",
+          errors: validationResult.error.issues.map(issue => ({
+            field: issue.path.join('.'),
+            message: issue.message
+          }))
+        });
+      }
+      
+      const credit = await storage.createCredit(validationResult.data);
+      res.status(201).json(credit);
+    } catch (error: any) {
+      console.error("Error creating credit account:", error);
+      
+      if (error.message?.includes('duplicate') || error.code === '23505') {
+        return res.status(409).json({ message: "Credit account already exists for this customer" });
+      }
+      
+      if (error.message?.includes('foreign key') || error.code === '23503') {
+        return res.status(400).json({ message: "Invalid customer ID or tenant ID" });
+      }
+      
+      res.status(500).json({ message: "Failed to create credit account" });
+    }
+  });
+
+  // Credit transactions routes
+  app.get("/api/tenants/:tenantId/credit-transactions", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const creditTransactions = await storage.getCreditTransactions(tenantId);
+      res.json(creditTransactions);
+    } catch (error) {
+      console.error("Error fetching credit transactions:", error);
+      res.status(500).json({ message: "Failed to fetch credit transactions" });
+    }
+  });
+
+  app.post("/api/tenants/:tenantId/credit-transactions", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      
+      // Validate input data
+      const validationResult = insertCreditTransactionSchema.safeParse({
+        ...req.body,
+        tenantId,
+      });
+      
+      if (!validationResult.success) {
+        return res.status(400).json({
+          message: "Invalid transaction data",
+          errors: validationResult.error.issues.map(issue => ({
+            field: issue.path.join('.'),
+            message: issue.message
+          }))
+        });
+      }
+      
+      const transaction = await storage.createCreditTransaction(validationResult.data);
+      res.status(201).json(transaction);
+    } catch (error: any) {
+      console.error("Error creating credit transaction:", error);
+      
+      if (error.message?.includes('No credit account found')) {
+        return res.status(404).json({ message: "Credit account not found for this customer" });
+      }
+      
+      if (error.message?.includes('exceed credit limit')) {
+        return res.status(400).json({ message: error.message });
+      }
+      
+      if (error.message?.includes('foreign key') || error.code === '23503') {
+        return res.status(400).json({ message: "Invalid customer ID, order ID, or tenant ID" });
+      }
+      
+      res.status(500).json({ message: "Failed to create credit transaction" });
+    }
+  });
+
+  // Update credit balance
+  app.put("/api/tenants/:tenantId/credit/:creditId/balance", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+    try {
+      const { tenantId, creditId } = req.params;
+      const { balance } = req.body;
+      
+      // Validate balance input
+      if (typeof balance !== 'string' || isNaN(parseFloat(balance))) {
+        return res.status(400).json({ 
+          message: "Invalid balance value", 
+          details: "Balance must be a valid numeric string" 
+        });
+      }
+      
+      const balanceNumber = parseFloat(balance);
+      if (balanceNumber < 0) {
+        return res.status(400).json({ 
+          message: "Invalid balance value", 
+          details: "Balance cannot be negative" 
+        });
+      }
+      
+      // Validate UUID format for creditId
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(creditId)) {
+        return res.status(400).json({ 
+          message: "Invalid credit ID format" 
+        });
+      }
+      
+      const updatedCredit = await storage.updateCreditBalance(creditId, tenantId, balance);
+      
+      if (!updatedCredit) {
+        return res.status(404).json({ 
+          message: "Credit account not found or you don't have permission to access it" 
+        });
+      }
+      
+      res.json(updatedCredit);
+    } catch (error: any) {
+      console.error("Error updating credit balance:", error);
+      
+      if (error.code === '23503') {
+        return res.status(404).json({ message: "Credit account not found" });
+      }
+      
+      res.status(500).json({ message: "Failed to update credit balance" });
     }
   });
 

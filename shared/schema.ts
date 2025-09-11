@@ -400,6 +400,8 @@ export type LoyaltyAccount = typeof loyaltyAccounts.$inferSelect;
 export type InsertLoyaltyAccount = typeof loyaltyAccounts.$inferInsert;
 export type Credit = typeof credits.$inferSelect;
 export type InsertCredit = typeof credits.$inferInsert;
+export type CreditTransaction = typeof creditTransactions.$inferSelect;
+export type InsertCreditTransaction = typeof creditTransactions.$inferInsert;
 export type TenantSettings = typeof settingsTenant.$inferSelect;
 export type InsertTenantSettings = typeof settingsTenant.$inferInsert;
 
@@ -427,6 +429,16 @@ export const insertCustomerSchema = createInsertSchema(customers).omit({
 });
 
 export const insertOrderSchema = createInsertSchema(orders).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertCreditSchema = createInsertSchema(credits).omit({
+  id: true,
+  updatedAt: true,
+});
+
+export const insertCreditTransactionSchema = createInsertSchema(creditTransactions).omit({
   id: true,
   createdAt: true,
 });

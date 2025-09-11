@@ -15,80 +15,49 @@ interface Customer {
   email?: string;
 }
 
-// Mock credit data for demonstration
-const mockCreditAccounts = [
-  {
-    id: "1",
-    customerId: "cust1",
-    customerName: "John Smith",
-    limitAmount: "1000.00",
-    balance: "250.00",
-    status: "active",
-    lastPayment: "2024-03-01",
-    nextDue: "2024-03-15",
-  },
-  {
-    id: "2",
-    customerId: "cust2",
-    customerName: "Sarah Johnson",
-    limitAmount: "500.00",
-    balance: "0.00",
-    status: "active",
-    lastPayment: "2024-03-10",
-    nextDue: null,
-  },
-  {
-    id: "3",
-    customerId: "cust3",
-    customerName: "Mike Wilson",
-    limitAmount: "750.00",
-    balance: "450.00",
-    status: "suspended",
-    lastPayment: "2024-02-15",
-    nextDue: "2024-03-01",
-    overdue: true,
-  },
-];
+interface CreditAccount {
+  id: string;
+  tenantId: string;
+  customerId: string;
+  customerName: string;
+  limitAmount: string;
+  balance: string;
+  status: string;
+  updatedAt: string;
+}
 
-const mockCreditTransactions = [
-  {
-    id: "1",
-    customerId: "cust1",
-    customerName: "John Smith",
-    amount: "85.50",
-    fee: "2.50",
-    dueDate: "2024-03-15",
-    status: "pending",
-    createdAt: "2024-03-01",
-  },
-  {
-    id: "2",
-    customerId: "cust3",
-    customerName: "Mike Wilson",
-    amount: "120.00",
-    fee: "5.00",
-    dueDate: "2024-03-01",
-    status: "overdue",
-    createdAt: "2024-02-01",
-  },
-  {
-    id: "3",
-    customerId: "cust2",
-    customerName: "Sarah Johnson",
-    amount: "45.75",
-    fee: "1.25",
-    dueDate: "2024-02-28",
-    status: "paid",
-    paidDate: "2024-02-25",
-    createdAt: "2024-02-01",
-  },
-];
+interface CreditTransaction {
+  id: string;
+  tenantId: string;
+  customerId: string;
+  customerName: string;
+  orderId?: string;
+  amount: string;
+  fee: string;
+  dueDate?: string;
+  paidDate?: string;
+  status: string;
+  createdAt: string;
+  lastPayment?: string;
+  nextDue?: string;
+  overdue?: boolean;
+}
 
 export default function Credit() {
   const { currentTenant } = useTenant();
 
-  const { data: customers, isLoading } = useQuery<Customer[]>({
+  const { data: customers, isLoading: customersLoading } = useQuery<Customer[]>({
     queryKey: ["/api/tenants", currentTenant, "customers"],
+    enabled: !!currentTenant,
+  });
+
+  const { data: creditAccounts, isLoading: creditAccountsLoading } = useQuery<CreditAccount[]>({
+    queryKey: ["/api/tenants", currentTenant, "credit"],
+    enabled: !!currentTenant,
+  });
+
+  const { data: creditTransactions, isLoading: creditTransactionsLoading } = useQuery<CreditTransaction[]>({
+    queryKey: ["/api/tenants", currentTenant, "credit-transactions"],
     enabled: !!currentTenant,
   });
 
@@ -118,15 +87,15 @@ export default function Credit() {
     }
   };
 
-  const totalCreditLimit = mockCreditAccounts.reduce(
+  const totalCreditLimit = creditAccounts?.reduce(
     (sum, account) => sum + parseFloat(account.limitAmount), 0
-  );
-  const totalOutstanding = mockCreditAccounts.reduce(
+  ) || 0;
+  const totalOutstanding = creditAccounts?.reduce(
     (sum, account) => sum + parseFloat(account.balance), 0
-  );
-  const overdueAccounts = mockCreditAccounts.filter(account => account.overdue).length;
+  ) || 0;
+  const overdueAccounts = creditTransactions?.filter(transaction => transaction.overdue).length || 0;
 
-  if (isLoading) {
+  if (customersLoading || creditAccountsLoading || creditTransactionsLoading) {
     return (
       <MainLayout>
         <div className="p-4 sm:p-6 lg:p-8">
@@ -218,7 +187,7 @@ export default function Credit() {
             <CardContent className="p-6">
               <h3 className="text-lg font-medium text-foreground mb-4">Credit Accounts</h3>
               <div className="space-y-4">
-                {mockCreditAccounts.map((account) => {
+                {creditAccounts && creditAccounts.length > 0 ? creditAccounts.map((account) => {
                   const availableCredit = parseFloat(account.limitAmount) - parseFloat(account.balance);
                   const utilizationPercent = (parseFloat(account.balance) / parseFloat(account.limitAmount)) * 100;
                   
@@ -262,18 +231,15 @@ export default function Credit() {
                         
                         <div className="flex justify-between items-center text-xs text-muted-foreground">
                           <span>Utilization: {utilizationPercent.toFixed(1)}%</span>
-                          {account.nextDue && (
-                            <span className={account.overdue ? "text-red-600 font-semibold" : ""}>
-                              {account.overdue ? "Overdue: " : "Due: "}
-                              {new Date(account.nextDue).toLocaleDateString()}
-                            </span>
-                          )}
+                          <span className="text-muted-foreground">
+                            Updated: {new Date(account.updatedAt).toLocaleDateString()}
+                          </span>
                         </div>
                       </div>
                       
                       <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
                         <span className="text-xs text-muted-foreground">
-                          Last payment: {account.lastPayment ? new Date(account.lastPayment).toLocaleDateString() : "Never"}
+                          Last updated: {new Date(account.updatedAt).toLocaleDateString()}
                         </span>
                         <div className="flex space-x-2">
                           <Button variant="outline" size="sm" data-testid={`button-adjust-limit-${account.id}`}>
@@ -286,7 +252,12 @@ export default function Credit() {
                       </div>
                     </div>
                   );
-                })}
+                }) : (
+                  <div className="text-center py-8 text-muted-foreground" data-testid="text-no-credit-accounts">
+                    <i className="fas fa-credit-card text-2xl mb-2"></i>
+                    <p>No credit accounts yet</p>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -296,7 +267,7 @@ export default function Credit() {
             <CardContent className="p-6">
               <h3 className="text-lg font-medium text-foreground mb-4">Recent Transactions</h3>
               <div className="space-y-4">
-                {mockCreditTransactions.map((transaction) => (
+                {creditTransactions && creditTransactions.length > 0 ? creditTransactions.slice(0, 5).map((transaction) => (
                   <div 
                     key={transaction.id}
                     className="border border-border rounded-lg p-4"
@@ -330,7 +301,7 @@ export default function Credit() {
                       <div>
                         <span className="text-muted-foreground">Due: </span>
                         <span className={`${transaction.status === 'overdue' ? 'text-red-600 font-semibold' : 'text-foreground'}`}>
-                          {new Date(transaction.dueDate).toLocaleDateString()}
+                          {transaction.dueDate ? new Date(transaction.dueDate).toLocaleDateString() : 'N/A'}
                         </span>
                       </div>
                       {transaction.paidDate && (
@@ -341,7 +312,12 @@ export default function Credit() {
                       )}
                     </div>
                   </div>
-                ))}
+                )) : (
+                  <div className="text-center py-8 text-muted-foreground" data-testid="text-no-credit-transactions">
+                    <i className="fas fa-receipt text-2xl mb-2"></i>
+                    <p>No credit transactions yet</p>
+                  </div>
+                )}
               </div>
               
               <div className="mt-4 text-center">
@@ -404,11 +380,11 @@ export default function Credit() {
                       data-testid="select-payment-customer"
                     >
                       <option value="">Select customer</option>
-                      {mockCreditAccounts.map((account) => (
+                      {creditAccounts?.map((account) => (
                         <option key={account.id} value={account.id}>
                           {account.customerName} (${account.balance} outstanding)
                         </option>
-                      ))}
+                      )) || []}
                     </select>
                   </div>
                   <div>
