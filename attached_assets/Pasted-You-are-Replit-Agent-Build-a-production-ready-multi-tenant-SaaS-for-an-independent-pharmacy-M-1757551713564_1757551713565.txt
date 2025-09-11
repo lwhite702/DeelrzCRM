@@ -1,0 +1,194 @@
+You are Replit Agent. Build a production-ready, multi-tenant SaaS for an **independent pharmacy**. Mobile-first, modular, secure, and CI-ready. Each module must be interconnected via shared auth/tenancy/pricing/inventory yet independently activated with feature flags. Include a **Super Admin**.
+
+====================
+SCOPE & MODULES (toggleable per tenant)
+====================
+1) Dashboard (KPIs, alerts)
+2) Inventory (medications/products, batches/lots, FIFO, WAC, adjustments)
+3) Customers (profiles, contact, preferences, notes)
+4) Sales (POS flow; Qty→Price & Amount→Suggested Qty; taxes/fees/discounts)
+5) Delivery (pickup + manual courier; fee estimator; address book)
+6) Loyalty (points, tiers, rewards)
+7) Credit (limits, eligibility, transactions, reminders)
+8) Payments (Card via Stripe, Cash, Custom Payment with details/comments form)
+9) Admin: Super Admin portal (tenants/users/flags), Tenant Settings
+
+Important: Handle **customer contact & preferences only**; no storage of sensitive prescription details or health data unless abstracted through an external compliant provider (out of scope). Keep PII minimal.
+
+====================
+ARCHITECTURE (platform-agnostic)
+====================
+- TypeScript end-to-end. Choose a modern web framework with SSR/edge or server routing (Next/Nest/Remix/SvelteKit acceptable).
+- SQL database (Postgres). Migrations + seed scripts.
+- Strongly-typed API (JSON), versioned routes, and generated client SDK for the frontend.
+- Background jobs (cron) for reminders/forecasting.
+- Realtime via broadcast channels (topic scoped).
+- Config via .env.example; no secrets committed.
+- CI: install → typecheck → lint → test → build.
+
+====================
+MULTITENANCY & AUTH
+====================
+- Tenants (organizations). Users join via users_tenants with roles: **super_admin** (global), owner, manager, staff.
+- All records carry tenant_id. Every API derives tenant from session + membership.
+- Enforce isolation in DB (RLS or equivalent policies with USING/WITH CHECK on tenant_id).
+- Super Admin can create/manage tenants, assign users, and set global feature flags.
+
+====================
+FEATURE FLAGS
+====================
+- Tables: feature_flags, feature_flag_overrides(tenant_scoped).
+- Flags: dashboard, inventory, customers, sales, delivery, loyalty, credit, payments.
+- Server/API denies disabled modules; UI hides them.
+
+====================
+SCHEMA (minimum viable)
+====================
+tenants(id, name, status, created_at)
+users(id, email, name, created_at)
+users_tenants(user_id, tenant_id, role, created_at, PK(user_id,tenant_id))
+feature_flags(id, key, description)
+feature_flag_overrides(id, tenant_id, flag_key, enabled, updated_at)
+
+products(id, tenant_id, name, ndc_code?, type{solid|liquid|other}, unit{g|ml|count}, description, created_at)
+batches(id, tenant_id, product_id, acquired_at, supplier, qty_acquired, total_cost, notes)
+inventory_lots(id, tenant_id, product_id, batch_id, qty_remaining, created_at)
+adjustments(id, tenant_id, product_id, qty_delta, reason{waste|sample|personal|recount}, notes, created_by, created_at)
+
+customers(id, tenant_id, name, phone, email, preferred_fulfillment{pickup|delivery}, preferred_payment, notes, created_at)
+orders(id, tenant_id, customer_id, status{draft|confirmed|paid|voided}, subtotal, tax, delivery_fee, total, payment_method, payment_notes, payment_status, payment_intent_id, charge_id, transfer_id, created_by, created_at)
+order_items(id, order_id, product_id, batch_id, qty, unit_price, unit_cost_snapshot)
+
+deliveries(id, tenant_id, order_id, method{pickup|manual_courier}, address_line1, city, state, postal_code, country, lat, lon, fee, status{requested|picked_up|delivered|canceled}, created_at)
+
+loyalty_accounts(id, tenant_id, customer_id, points, tier, updated_at)
+loyalty_events(id, tenant_id, customer_id, order_id, points_delta, reason, created_at)
+
+credits(id, tenant_id, customer_id, limit_amount, balance, status{active|suspended|frozen}, updated_at)
+credit_transactions(id, tenant_id, customer_id, order_id, amount, fee, due_date, paid_date, status{pending|paid|overdue}, created_at)
+
+settings_tenant(tenant_id PK, target_margin, min_stock_threshold, exposure_cap, delivery_methods_enabled text, lead_time_days, safety_days, city_profile, payment_mode{platform|connect_standard|connect_express}, application_fee_bps int DEFAULT 0, default_currency text DEFAULT 'usd')
+
+Indexes: (tenant_id, created_at) across major tables; composite (tenant_id,status,created_at) for orders/deliveries.
+
+====================
+BUSINESS LOGIC
+====================
+Inventory
+- Batch intake creates lots; **WAC** = weighted average by remaining qty.
+- On order confirm: **FIFO** allocate from lots; persist unit_cost_snapshot per line.
+- Adjustments apply FIFO deltas with audit; WAC snapshot helpers.
+
+Pricing
+- margin_price = WAC / (1 − target_margin)
+- historical_median = rolling median of last N sales (per product/tenant)
+- recommended_unit_price = weighted blend(margin_price, historical_median)
+- Tiered pricing: retail tiers, VIP overrides, wholesale thresholds (per tenant/product).
+
+Sales (POS)
+- Two calculators:
+  1) **Qty→Price**: compute line total with tiers/VIP/wholesale.
+  2) **Amount→Suggested Qty**: maximize qty within amount using min increment & stock; return qty + change.
+- Payment methods: **Card, Cash, Custom Payment**. For **Cash** and **Custom**, show a **details/comments form**; persist to `order.payment_notes`.
+- On confirm: decrement inventory FIFO, compute totals, update loyalty and (optionally) credit.
+
+Delivery
+- Methods: **pickup, manual_courier**.
+- Estimator: given pickup/dropoff lat/lon (or address + geocode adapter), compute distance/time; city profile (base, perMile, perMin, minFee, surcharges); return fee & ETA; totals include fee.
+
+Loyalty
+- Earn points per paid order (configurable), tiers with thresholds, redemption as discounts/bonuses.
+
+Credit
+- Eligibility denies when overdue>0, stock below threshold, or exposure>cap.
+- Dynamic limits adjust by on-time/late streaks; reminders T-24h, due-day, D+1.
+
+Forecasting & Alerts
+- ETS-style smoothing with day-of-week uplift; restock alert when projected stockout < lead_time + safety_days and cash_on_hand ≥ projected reorder_cost. Dashboard shows & manages alerts.
+
+====================
+PAYMENTS (Stripe design with upgrade path)
+====================
+Tenant settings:
+- payment_mode: **platform** (default) | **connect_standard** | **connect_express**
+- stripe_account_id (nullable), application_fee_bps, default_currency
+- payments feature flag
+
+Server/API:
+- POST /api/payments/create-intent (server calculates trusted amount from order)
+  - platform: create PaymentIntent { amount, currency, metadata{tenant_id, order_id} }
+  - connect_* (with stripe_account_id):
+    PaymentIntent { amount, currency, application_fee_amount, transfer_data{ destination: acct }, on_behalf_of: acct, metadata }
+  - Save payment_intent_id on order; return clientSecret
+- POST /api/payments/connect/onboard → create Standard/Express account & account link; return onboarding URL
+- GET /api/payments/connect/status → charges_enabled/payouts_enabled/requirements
+- POST /api/stripe/webhook → verify signature; handle payment_intent.succeeded/failed, account.updated; update orders & tenant cache; store processed event ids (idempotency)
+
+Frontend:
+- Tenant Settings → Payments: select mode, onboarding button, status
+- Checkout: Card, **Cash**, **Custom Payment** (both include details/comments form saved to order.payment_notes)
+
+====================
+APIs (versioned & typed)
+====================
+/api/auth/* (session)
+/api/tenants/* (super admin CRUD, assign users)
+/api/flags/* (global + tenant overrides)
+/api/products/*, /api/batches/*, /api/inventory/*
+/api/customers/*
+/api/orders/* (create, update, confirm, pay, void)
+/api/orders/assist/amount-to-qty
+/api/orders/assist/qty-to-price
+/api/delivery/estimate
+/api/loyalty/*
+/api/credits/eligibility, /api/credits/transactions
+/api/payments/create-intent
+/api/payments/connect/onboard
+/api/payments/connect/status
+/api/stripe/webhook
+All endpoints: strict JSON schemas; reject unknown keys. Generate a typed client SDK.
+
+====================
+UI (mobile-first)
+====================
+- Shell: tenant switcher, feature-aware sidebar, user menu.
+- Dashboard: KPIs (revenue, margins, stockouts, overdue credit), alerts.
+- Inventory: products, batch intake, lot view, adjustments (reasons, notes).
+- Customers: list/profile, preferences, loyalty & credit cards.
+- Sales: POS with two calculators, cart, taxes/fees/discounts, **Cash/Custom details/comments** captured.
+- Delivery: address picker, estimator fee/ETA; integrate with order totals.
+- Loyalty: points, tiers, redeem flow.
+- Credit: status, transactions, grant/deny with reasons.
+- Admin: Super Admin portal (tenants/users/flags), Tenant Settings (pricing, payment, delivery, thresholds).
+
+====================
+BACKGROUND JOBS
+====================
+- Credit reminders, forecasting, restock alerts; retries + idempotency; job logs & metrics.
+
+====================
+TESTS & CI
+====================
+- Unit: FIFO/WAC, pricing blend, assist calculators, credit eligibility, estimator fees.
+- Integration: API contracts; multitenancy access tests (must not cross tenant).
+- E2E: Add Batch → Create Sale (cash/card/custom) → Loyalty/Credit updates → Delivery fee in totals.
+- Mock external HTTP (routing/geocode/Stripe).
+- CI: install → typecheck → lint → test → build. Provide .env.example.
+
+====================
+ACCEPTANCE CRITERIA
+====================
+- Super Admin can create tenants, assign users, toggle modules.
+- Tenant users only see their data; feature flags enforce module access.
+- Inventory FIFO/WAC/adjustments correct with audit trail.
+- Sales supports Qty→Price & Amount→Qty; **Cash & Custom** capture details/comments and persist.
+- Delivery estimator returns fee/ETA; totals include delivery fee.
+- Loyalty accrues/redeems; Credit eligibility enforced with reasons & reminders.
+- Payments support platform mode and Connect upgrade per tenant.
+- Forecasting produces restock alerts; dashboard shows & acknowledges.
+- All tests pass; CI green.
+
+====================
+BUILD NOW
+====================
+Initialize repo, scaffold DB/API/UI/jobs/webhooks, add migrations & seeds, implement endpoints with strict validation and typed SDK, build pages & components, wire feature flags and tenancy, add tests & CI, and deliver a runnable project that meets all acceptance criteria.
