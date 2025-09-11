@@ -53,6 +53,12 @@ export interface IStorage {
   
   // Products
   getProducts(tenantId: string): Promise<Product[]>;
+  getProductsWithInventory(tenantId: string): Promise<Array<Product & { 
+    currentStock: number; 
+    wac: string; 
+    minStockThreshold: number;
+    stockStatus: 'in_stock' | 'low_stock' | 'out_of_stock';
+  }>>;
   createProduct(product: InsertProduct): Promise<Product>;
   getProduct(id: string, tenantId: string): Promise<Product | undefined>;
   
@@ -178,6 +184,72 @@ export class DatabaseStorage implements IStorage {
   // Products
   async getProducts(tenantId: string): Promise<Product[]> {
     return await db.select().from(products).where(eq(products.tenantId, tenantId));
+  }
+
+  async getProductsWithInventory(tenantId: string): Promise<Array<Product & { 
+    currentStock: number; 
+    wac: string; 
+    minStockThreshold: number;
+    stockStatus: 'in_stock' | 'low_stock' | 'out_of_stock';
+  }>> {
+    // Get tenant settings for min stock threshold
+    const tenantSettings = await this.getTenantSettings(tenantId);
+    const minStockThreshold = tenantSettings?.minStockThreshold || 10;
+
+    // Get all products for the tenant
+    const productList = await this.getProducts(tenantId);
+    
+    // Efficient bulk queries: get stock aggregates for all products at once
+    const stockAggregates = await db
+      .select({
+        productId: inventoryLots.productId,
+        totalStock: sql<number>`COALESCE(SUM(${inventoryLots.qtyRemaining}), 0)`,
+      })
+      .from(inventoryLots)
+      .innerJoin(products, eq(inventoryLots.productId, products.id))
+      .where(eq(products.tenantId, tenantId))
+      .groupBy(inventoryLots.productId);
+
+    // Get WAC aggregates for all products at once (proper weighted average)
+    const wacAggregates = await db
+      .select({
+        productId: batches.productId,
+        wac: sql<number>`COALESCE(SUM(${batches.totalCost}) / NULLIF(SUM(${batches.qtyAcquired}), 0), 0)`,
+      })
+      .from(batches)
+      .innerJoin(products, eq(batches.productId, products.id))
+      .where(eq(products.tenantId, tenantId))
+      .groupBy(batches.productId);
+
+    // Create lookup maps for efficient access
+    const stockMap = new Map(stockAggregates.map(s => [s.productId, s.totalStock]));
+    const wacMap = new Map(wacAggregates.map(w => [w.productId, w.wac]));
+    
+    // Combine data for each product
+    const productsWithInventory = productList.map(product => {
+      const currentStock = stockMap.get(product.id) || 0;
+      const wac = wacMap.get(product.id) || 0;
+
+      // Determine stock status
+      let stockStatus: 'in_stock' | 'low_stock' | 'out_of_stock';
+      if (currentStock === 0) {
+        stockStatus = 'out_of_stock';
+      } else if (currentStock <= minStockThreshold) {
+        stockStatus = 'low_stock';
+      } else {
+        stockStatus = 'in_stock';
+      }
+
+      return {
+        ...product,
+        currentStock,
+        wac: wac.toFixed(2),
+        minStockThreshold,
+        stockStatus,
+      };
+    });
+
+    return productsWithInventory;
   }
 
   async createProduct(product: InsertProduct): Promise<Product> {

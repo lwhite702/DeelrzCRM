@@ -16,13 +16,22 @@ interface Product {
   unit: string;
   description?: string;
   createdAt: string;
+  currentStock?: number;
+  wac?: string;
+  minStockThreshold?: number;
+  stockStatus?: 'in_stock' | 'low_stock' | 'out_of_stock';
 }
 
 export default function Inventory() {
   const { currentTenant } = useTenant();
   
   const { data: products, isLoading } = useQuery<Product[]>({
-    queryKey: ["/api/tenants", currentTenant, "products"],
+    queryKey: ["/api/tenants", currentTenant, "products", "with_inventory"],
+    queryFn: async () => {
+      const response = await fetch(`/api/tenants/${currentTenant}/products?with_inventory=true`);
+      if (!response.ok) throw new Error('Failed to fetch products');
+      return response.json();
+    },
     enabled: !!currentTenant,
   });
 
@@ -174,15 +183,29 @@ export default function Inventory() {
                           {product.ndcCode || "N/A"}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm font-medium text-foreground">0 {product.unit}</div>
-                          <div className="text-xs text-muted-foreground">Min: 100</div>
+                          <div className="text-sm font-medium text-foreground">
+                            {product.currentStock || 0} {product.unit}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            Min: {product.minStockThreshold || 0}
+                          </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-foreground">
-                          $0.00
+                          ${product.wac || "0.00"}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                            Out of Stock
+                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                            product.stockStatus === 'in_stock' 
+                              ? 'bg-green-100 text-green-800' 
+                              : product.stockStatus === 'low_stock'
+                              ? 'bg-yellow-100 text-yellow-800'
+                              : 'bg-red-100 text-red-800'
+                          }`}>
+                            {product.stockStatus === 'in_stock' 
+                              ? 'In Stock' 
+                              : product.stockStatus === 'low_stock'
+                              ? 'Low Stock'
+                              : 'Out of Stock'}
                           </span>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">

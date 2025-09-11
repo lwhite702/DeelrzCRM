@@ -91,8 +91,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/tenants/:tenantId/products", isAuthenticated, async (req: any, res) => {
     try {
       const { tenantId } = req.params;
-      const products = await storage.getProducts(tenantId);
-      res.json(products);
+      const withInventory = req.query.with_inventory === 'true';
+      
+      if (withInventory) {
+        const products = await storage.getProductsWithInventory(tenantId);
+        res.json(products);
+      } else {
+        const products = await storage.getProducts(tenantId);
+        res.json(products);
+      }
     } catch (error) {
       console.error("Error fetching products:", error);
       res.status(500).json({ message: "Failed to fetch products" });
