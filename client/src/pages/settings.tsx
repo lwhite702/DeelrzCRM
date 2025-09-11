@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { useTenant } from "@/hooks/use-tenant";
+import { useTenant } from "@/contexts/tenant-context";
 import { useFeatureFlags } from "@/hooks/use-feature-flags";
 import { apiRequest } from "@/lib/queryClient";
 

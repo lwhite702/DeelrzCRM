@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useTenant } from "@/hooks/use-tenant";
+import { useTenant } from "@/contexts/tenant-context";
 import { useLocation } from "@/lib/router";
 
 interface DashboardKPIs {

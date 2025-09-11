@@ -2,7 +2,7 @@ import { useState } from "react";
 import Header from "./header";
 import Sidebar from "./sidebar";
 import MobileSidebar from "./mobile-sidebar";
-import { useTenant } from "@/hooks/use-tenant";
+import { useTenant } from "@/contexts/tenant-context";
 import { useQuery } from "@tanstack/react-query";
 
 interface MainLayoutProps {

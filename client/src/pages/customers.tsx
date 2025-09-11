@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useTenant } from "@/hooks/use-tenant";
+import { useTenant } from "@/contexts/tenant-context";
 
 interface Customer {
   id: string;

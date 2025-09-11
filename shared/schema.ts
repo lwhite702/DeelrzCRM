@@ -54,6 +54,7 @@ export const creditStatusEnum = pgEnum("credit_status", ["active", "suspended", 
 export const creditTransactionStatusEnum = pgEnum("credit_transaction_status", ["pending", "paid", "overdue"]);
 export const paymentModeEnum = pgEnum("payment_mode", ["platform", "connect_standard", "connect_express"]);
 export const paymentMethodEnum = pgEnum("payment_method", ["card", "cash", "custom", "transfer", "ach"]);
+export const kbCategoryEnum = pgEnum("kb_category", ["getting_started", "features", "troubleshooting", "billing", "api", "integrations", "other"]);
 
 // Tenants
 export const tenants = pgTable("tenants", {
@@ -354,12 +355,58 @@ export const webhookEvents = pgTable("webhook_events", {
   index("idx_webhook_events_processed").on(table.processed),
 ]);
 
+// Knowledge Base Articles
+export const kbArticles = pgTable("kb_articles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").references(() => tenants.id, { onDelete: "cascade" }), // nullable for global articles
+  title: varchar("title", { length: 255 }).notNull(),
+  slug: varchar("slug", { length: 255 }).notNull().unique(),
+  contentMd: text("content_md").notNull(),
+  category: kbCategoryEnum("category").notNull(),
+  tags: varchar("tags", { length: 100 }).array().default([]),
+  isActive: boolean("is_active").notNull().default(true),
+  createdBy: varchar("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("idx_kb_articles_tenant").on(table.tenantId),
+  index("idx_kb_articles_slug").on(table.slug),
+  index("idx_kb_articles_category").on(table.category),
+  index("idx_kb_articles_active").on(table.isActive),
+]);
+
+// Knowledge Base Feedback
+export const kbFeedback = pgTable("kb_feedback", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  articleId: varchar("article_id").notNull().references(() => kbArticles.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  isHelpful: boolean("is_helpful").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("idx_kb_feedback_article").on(table.articleId),
+  index("idx_kb_feedback_user").on(table.userId),
+  index("idx_kb_feedback_tenant").on(table.tenantId),
+]);
+
+// User Settings
+export const userSettings = pgTable("user_settings", {
+  userId: varchar("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  hasCompletedTour: boolean("has_completed_tour").notNull().default(false),
+  tourProgress: jsonb("tour_progress"),
+  helpPreferences: jsonb("help_preferences"),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // Relations
-export const usersRelations = relations(users, ({ many }) => ({
+export const usersRelations = relations(users, ({ many, one }) => ({
   usersTenants: many(usersTenants),
   ordersCreated: many(orders),
   adjustmentsCreated: many(adjustments),
   paymentsCreated: many(payments),
+  kbArticlesCreated: many(kbArticles),
+  kbFeedbackGiven: many(kbFeedback),
+  settings: one(userSettings),
 }));
 
 export const tenantsRelations = relations(tenants, ({ many, one }) => ({
@@ -370,6 +417,8 @@ export const tenantsRelations = relations(tenants, ({ many, one }) => ({
   payments: many(payments),
   settings: one(settingsTenant),
   featureFlagOverrides: many(featureFlagOverrides),
+  kbArticles: many(kbArticles),
+  kbFeedback: many(kbFeedback),
 }));
 
 export const usersTenantsRelations = relations(usersTenants, ({ one }) => ({
@@ -444,6 +493,40 @@ export const paymentsRelations = relations(payments, ({ one }) => ({
   }),
 }));
 
+export const kbArticlesRelations = relations(kbArticles, ({ one, many }) => ({
+  tenant: one(tenants, {
+    fields: [kbArticles.tenantId],
+    references: [tenants.id],
+  }),
+  createdBy: one(users, {
+    fields: [kbArticles.createdBy],
+    references: [users.id],
+  }),
+  feedback: many(kbFeedback),
+}));
+
+export const kbFeedbackRelations = relations(kbFeedback, ({ one }) => ({
+  article: one(kbArticles, {
+    fields: [kbFeedback.articleId],
+    references: [kbArticles.id],
+  }),
+  user: one(users, {
+    fields: [kbFeedback.userId],
+    references: [users.id],
+  }),
+  tenant: one(tenants, {
+    fields: [kbFeedback.tenantId],
+    references: [tenants.id],
+  }),
+}));
+
+export const userSettingsRelations = relations(userSettings, ({ one }) => ({
+  user: one(users, {
+    fields: [userSettings.userId],
+    references: [users.id],
+  }),
+}));
+
 // Type exports
 export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
@@ -477,6 +560,12 @@ export type TenantSettings = typeof settingsTenant.$inferSelect;
 export type InsertTenantSettings = typeof settingsTenant.$inferInsert;
 export type WebhookEvent = typeof webhookEvents.$inferSelect;
 export type InsertWebhookEvent = typeof webhookEvents.$inferInsert;
+export type KbArticle = typeof kbArticles.$inferSelect;
+export type InsertKbArticle = typeof kbArticles.$inferInsert;
+export type KbFeedback = typeof kbFeedback.$inferSelect;
+export type InsertKbFeedback = typeof kbFeedback.$inferInsert;
+export type UserSettings = typeof userSettings.$inferSelect;
+export type InsertUserSettings = typeof userSettings.$inferInsert;
 
 // Zod schemas
 export const insertUserSchema = createInsertSchema(users).omit({
@@ -529,4 +618,19 @@ export const insertTenantSettingsSchema = createInsertSchema(settingsTenant).omi
 export const insertWebhookEventSchema = createInsertSchema(webhookEvents).omit({
   id: true,
   createdAt: true,
+});
+
+export const insertKbArticleSchema = createInsertSchema(kbArticles).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertKbFeedbackSchema = createInsertSchema(kbFeedback).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertUserSettingsSchema = createInsertSchema(userSettings).omit({
+  updatedAt: true,
 });

@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { useTenant } from "@/hooks/use-tenant";
+import { useTenant } from "@/contexts/tenant-context";
 import { apiRequest } from "@/lib/queryClient";
 
 interface Product {

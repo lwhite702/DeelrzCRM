@@ -1,0 +1,72 @@
+You are my senior engineer. Implement a full in-app help system for DeelrzCRM. It must include contextual tooltips, a searchable knowledge base (with screenshots support), and a guided tour for new users. Keep the design mobile-first, modular, and tenant-aware.
+
+====================
+FEATURE SET
+====================
+1) Tooltips
+- Add tooltip components using a headless UI library (Radix/HeadlessUI) styled with Tailwind.
+- Contextual tooltips for all key UI actions (Add Customer, Add Medication, Create Sale, Confirm Payment, Delivery Estimate).
+- Tooltips must load dynamically from a config or DB table so text can be updated without redeploy.
+
+2) Knowledge Base
+- Create a /help page that displays searchable articles.
+- Articles stored in DB table `kb_articles` (id, tenant_id NULLABLE for global vs tenant-specific, title, slug, content_md, created_at).
+- Content rendered from Markdown with support for images/screenshots.
+- Add basic category/tag system for organizing topics.
+- Include a “Was this helpful?” thumbs up/down feedback stored in `kb_feedback`.
+
+3) Guided Tour / Onboarding
+- Implement a guided tour for first-time users (dashboard, inventory, customers, sales, payments).
+- Use a library like Shepherd.js or Driver.js, or a custom React overlay.
+- Tours should be multi-step with highlighting, explanatory text, and a “skip” option.
+- Store completion status per user in `user_settings.has_completed_tour`.
+
+4) Admin Management
+- Super Admin can add/edit/remove KB articles in a simple admin editor (Markdown + image upload).
+- Allow tenants to add their own KB overrides if needed.
+
+5) UI/UX
+- Global help button in the header → opens search bar and quick links to KB.
+- Contextual “?” buttons near forms that link directly to the relevant KB article.
+- Ensure accessibility: keyboard focus, ARIA labels.
+
+6) Screenshots
+- Support image upload for KB articles.
+- Store in Supabase storage (or Replit equivalent) under /kb/{tenant_id}/{article_id}.
+- Render inline in Markdown content.
+
+====================
+TECH REQUIREMENTS
+====================
+- TypeScript strict across client and server.
+- Database migrations for `kb_articles`, `kb_feedback`, `user_settings`.
+- API routes: 
+  * GET /api/help/articles (list, search)
+  * GET /api/help/articles/:slug (detail)
+  * POST /api/help/articles (admin only)
+  * POST /api/help/feedback (record thumbs up/down)
+- Client hooks: useReactQuery for KB fetch, cache, and search.
+- Markdown rendering: use react-markdown with syntax highlighting and safe image rendering.
+- Guided tour: store progress in user_settings via API.
+
+====================
+ACCEPTANCE CRITERIA
+====================
+- Every major action in the UI has a tooltip.
+- Users can search and read knowledge base articles with images/screenshots.
+- New users see a guided tour on first login (can be skipped or replayed).
+- Super Admin can manage KB content.
+- Tenant-specific overrides supported.
+- All APIs protected by tenant + role checks.
+- Works on mobile and desktop.
+
+====================
+DELIVERABLES
+====================
+- New DB migrations.
+- Backend API routes.
+- React components: Tooltip, HelpSearch, KnowledgeBase, GuidedTour.
+- Super Admin UI for article management.
+- Documentation in README for how to add/edit KB articles and screenshots.
+
+Implement now with best practices, keep modular, and integrate into existing DeelrzCRM architecture.
