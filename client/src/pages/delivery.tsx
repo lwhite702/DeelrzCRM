@@ -74,15 +74,16 @@ export default function Delivery() {
     enabled: !!currentTenant,
   });
 
-  const estimateDeliveryMutation = useMutation({
-    mutationFn: async (data: {
-      method: "pickup" | "manual_courier";
-      pickup?: { lat?: number; lon?: number; address?: string };
-      dropoff?: { lat?: number; lon?: number; address?: string };
-      weightKg?: number;
-      priority?: "standard" | "rush";
-    }) => {
-      return apiRequest("POST", "/api/delivery/estimate", data);
+  const estimateDeliveryMutation = useMutation<DeliveryEstimate, Error, {
+    method: "pickup" | "manual_courier";
+    pickup?: { lat?: number; lon?: number; address?: string };
+    dropoff?: { lat?: number; lon?: number; address?: string };
+    weightKg?: number;
+    priority?: "standard" | "rush";
+  }>({
+    mutationFn: async (data) => {
+      const response = await apiRequest("POST", "/api/delivery/estimate", data);
+      return response.json() as Promise<DeliveryEstimate>;
     },
     onError: (error) => {
       toast({

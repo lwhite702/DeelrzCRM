@@ -11,37 +11,98 @@ const app = express();
 // Trust proxy for accurate client IPs
 app.set('trust proxy', 1);
 
-// Security middleware
-app.use(helmet());
+// Security middleware - configured for development compatibility
+const isProduction = process.env.NODE_ENV === 'production';
+app.use(helmet({
+  contentSecurityPolicy: isProduction ? undefined : {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: [
+        "'self'",
+        "'unsafe-inline'",
+        "'unsafe-eval'",
+        "https://replit.com",
+        "https://*.replit.com",
+        "https://*.replit.dev",
+        "data:",
+        "blob:"
+      ],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"],
+      imgSrc: ["'self'", "data:", "https:"],
+      fontSrc: ["'self'", "data:", "https:"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"]
+    }
+  },
+  crossOriginEmbedderPolicy: false
+}));
 app.use(compression());
 
 // CORS configuration
-const isProduction = process.env.NODE_ENV === 'production';
 const allowedOrigins = (() => {
-  const origins = ['http://localhost:5173']; // Always allow local dev
+  const origins: (string | RegExp)[] = ['http://localhost:5173']; // Always allow local dev
   
+  // Add current Replit domain - try multiple patterns
+  if (process.env.REPL_SLUG && process.env.REPL_OWNER) {
+    // Current format
+    origins.push(`https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.replit.dev`);
+    // Legacy format (just in case)
+    origins.push(`https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`);
+  }
+  
+  // Add any custom domains from environment
   if (process.env.REPLIT_DOMAINS) {
     const replitDomains = process.env.REPLIT_DOMAINS.split(',').map(domain => domain.trim());
     origins.push(...replitDomains);
   }
   
-  // Add current Replit app domain if available
-  if (process.env.REPL_SLUG && process.env.REPL_OWNER) {
-    origins.push(`https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`);
+  // Add current hostname if we can detect it
+  const currentHost = process.env.REPLIT_URL || process.env.REPL_URL;
+  if (currentHost) {
+    origins.push(currentHost);
+  }
+  
+  // In development, be more permissive
+  if (!isProduction) {
+    origins.push('http://localhost:3000', 'http://localhost:5000');
+    origins.push('http://127.0.0.1:5000', 'https://127.0.0.1:5000');
+    origins.push('http://127.0.0.1:3000', 'https://127.0.0.1:3000');
+    // Allow any replit.dev domain in development
+    origins.push(/https:\/\/.*\.replit\.dev/);
   }
   
   return origins;
 })();
 
 app.use(cors({
-  origin: (origin, callback) => {
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
     
-    if (allowedOrigins.indexOf(origin) !== -1) {
+    // Check if origin matches any allowed origin
+    const isAllowed = allowedOrigins.some(allowed => {
+      if (typeof allowed === 'string') {
+        return allowed === origin;
+      } else if (allowed instanceof RegExp) {
+        return allowed.test(origin);
+      }
+      return false;
+    });
+    
+    if (isAllowed) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      // In development, log the blocked origin for debugging
+      if (!isProduction) {
+        console.log(`CORS blocked origin: ${origin}`);
+        console.log('Allowed origins:', allowedOrigins);
+        // Be more permissive in development
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
     }
   },
   credentials: true,

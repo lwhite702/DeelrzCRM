@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { Router } from "express";
+import express from "express";
 import { storage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
 import { z } from "zod";
@@ -16,6 +17,7 @@ import {
   insertTenantSettingsSchema,
   batches,
   products,
+  webhookEvents,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, sql } from "drizzle-orm";
@@ -853,11 +855,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (paymentIntent.status === "succeeded") {
         updateData.status = "completed";
-        // Get charge ID from the payment intent
-        if (paymentIntent.charges && paymentIntent.charges.data.length > 0) {
-          updateData.chargeId = paymentIntent.charges.data[0].id;
+        // Get charge ID from the latest charge
+        if (paymentIntent.latest_charge) {
+          updateData.chargeId = typeof paymentIntent.latest_charge === 'string' 
+            ? paymentIntent.latest_charge 
+            : paymentIntent.latest_charge.id;
         }
-      } else if (paymentIntent.status === "payment_failed" || paymentIntent.status === "canceled") {
+      } else if (paymentIntent.status === "requires_payment_method" || paymentIntent.status === "canceled") {
         updateData.status = "failed";
         updateData.failureReason = paymentIntent.last_payment_error?.message || "Payment failed";
       }
@@ -1016,8 +1020,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   status: event.type === 'payment_intent.succeeded' ? 'completed' : 'failed',
                 };
                 
-                if (event.type === 'payment_intent.succeeded' && paymentIntent.charges?.data?.[0]) {
-                  updateData.chargeId = paymentIntent.charges.data[0].id;
+                if (event.type === 'payment_intent.succeeded' && paymentIntent.latest_charge) {
+                  updateData.chargeId = typeof paymentIntent.latest_charge === 'string' 
+                    ? paymentIntent.latest_charge 
+                    : paymentIntent.latest_charge.id;
                 } else if (event.type === 'payment_intent.payment_failed') {
                   updateData.failureReason = paymentIntent.last_payment_error?.message || 'Payment failed';
                 }
@@ -1095,7 +1101,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Haversine distance calculation
-      function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+      const haversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
         const R = 3959; // Earth's radius in miles
         const dLat = (lat2 - lat1) * Math.PI / 180;
         const dLon = (lon2 - lon1) * Math.PI / 180;
@@ -1104,7 +1110,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   Math.sin(dLon/2) * Math.sin(dLon/2);
         const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
         return R * c;
-      }
+      };
 
       const distanceMiles = haversineDistance(pickup.lat, pickup.lon, dropoff.lat, dropoff.lon);
       
