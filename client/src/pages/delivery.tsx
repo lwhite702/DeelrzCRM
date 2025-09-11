@@ -9,7 +9,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useTenant } from "@/hooks/use-tenant";
 import { apiRequest } from "@/lib/queryClient";
-import MainLayout from "@/components/layout/main-layout";
 
 interface DeliveryEstimate {
   distance: string;
@@ -129,21 +128,18 @@ export default function Delivery() {
 
   if (ordersLoading) {
     return (
-      <MainLayout>
-        <div className="p-4 sm:p-6 lg:p-8">
-          <Skeleton className="h-8 w-48 mb-8" />
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Skeleton className="h-96 w-full" />
-            <Skeleton className="h-96 w-full" />
-          </div>
+      <div className="p-4 sm:p-6 lg:p-8">
+        <Skeleton className="h-8 w-48 mb-8" />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Skeleton className="h-96 w-full" />
+          <Skeleton className="h-96 w-full" />
         </div>
-      </MainLayout>
+      </div>
     );
   }
 
   return (
-    <MainLayout>
-      <div className="p-4 sm:p-6 lg:p-8">
+    <div className="p-4 sm:p-6 lg:p-8">
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-foreground">Delivery Management</h1>
           <p className="mt-1 text-sm text-muted-foreground">Manage deliveries and estimate fees</p>
@@ -356,7 +352,6 @@ export default function Delivery() {
             </div>
           </CardContent>
         </Card>
-      </div>
-    </MainLayout>
+    </div>
   );
 }

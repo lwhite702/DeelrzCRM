@@ -11,7 +11,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useTenant } from "@/hooks/use-tenant";
 import { apiRequest } from "@/lib/queryClient";
-import MainLayout from "@/components/layout/main-layout";
 
 interface Product {
   id: string;
@@ -244,25 +243,22 @@ export default function SalesPOS() {
 
   if (productsLoading) {
     return (
-      <MainLayout>
-        <div className="p-4 sm:p-6 lg:p-8">
-          <Skeleton className="h-8 w-48 mb-8" />
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2">
-              <Skeleton className="h-96 w-full" />
-            </div>
-            <div>
-              <Skeleton className="h-96 w-full" />
-            </div>
+      <div className="p-4 sm:p-6 lg:p-8">
+        <Skeleton className="h-8 w-48 mb-8" />
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2">
+            <Skeleton className="h-96 w-full" />
+          </div>
+          <div>
+            <Skeleton className="h-96 w-full" />
           </div>
         </div>
-      </MainLayout>
+      </div>
     );
   }
 
   return (
-    <MainLayout>
-      <div className="p-4 sm:p-6 lg:p-8">
+    <div className="p-4 sm:p-6 lg:p-8">
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-foreground">Sales Point of Sale</h1>
           <p className="mt-1 text-sm text-muted-foreground">Process customer transactions and manage orders</p>
@@ -572,7 +568,6 @@ export default function SalesPOS() {
             </Card>
           </div>
         </div>
-      </div>
-    </MainLayout>
+    </div>
   );
 }

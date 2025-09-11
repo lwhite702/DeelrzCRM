@@ -6,7 +6,6 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTenant } from "@/hooks/use-tenant";
-import MainLayout from "@/components/layout/main-layout";
 
 interface Product {
   id: string;
@@ -37,25 +36,22 @@ export default function Inventory() {
 
   if (isLoading) {
     return (
-      <MainLayout>
-        <div className="p-4 sm:p-6 lg:p-8">
-          <div className="mb-8">
-            <Skeleton className="h-8 w-48 mb-2" />
-            <Skeleton className="h-4 w-64" />
-          </div>
-          <Card>
-            <CardContent className="p-6">
-              <Skeleton className="h-96 w-full" />
-            </CardContent>
-          </Card>
+      <div className="p-4 sm:p-6 lg:p-8">
+        <div className="mb-8">
+          <Skeleton className="h-8 w-48 mb-2" />
+          <Skeleton className="h-4 w-64" />
         </div>
-      </MainLayout>
+        <Card>
+          <CardContent className="p-6">
+            <Skeleton className="h-96 w-full" />
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
   return (
-    <MainLayout>
-      <div className="p-4 sm:p-6 lg:p-8">
+    <div className="p-4 sm:p-6 lg:p-8">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8">
           <div>
             <h1 className="text-2xl font-bold text-foreground">Inventory Management</h1>
@@ -232,7 +228,6 @@ export default function Inventory() {
             )}
           </CardContent>
         </Card>
-      </div>
-    </MainLayout>
+    </div>
   );
 }

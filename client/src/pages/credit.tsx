@@ -6,7 +6,6 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTenant } from "@/hooks/use-tenant";
-import MainLayout from "@/components/layout/main-layout";
 
 interface Customer {
   id: string;
@@ -97,22 +96,19 @@ export default function Credit() {
 
   if (customersLoading || creditAccountsLoading || creditTransactionsLoading) {
     return (
-      <MainLayout>
-        <div className="p-4 sm:p-6 lg:p-8">
-          <Skeleton className="h-8 w-48 mb-8" />
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <Skeleton className="h-32 w-full" />
-            <Skeleton className="h-32 w-full" />
-            <Skeleton className="h-32 w-full" />
-          </div>
+      <div className="p-4 sm:p-6 lg:p-8">
+        <Skeleton className="h-8 w-48 mb-8" />
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <Skeleton className="h-32 w-full" />
+          <Skeleton className="h-32 w-full" />
+          <Skeleton className="h-32 w-full" />
         </div>
-      </MainLayout>
+      </div>
     );
   }
 
   return (
-    <MainLayout>
-      <div className="p-4 sm:p-6 lg:p-8">
+    <div className="p-4 sm:p-6 lg:p-8">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8">
           <div>
             <h1 className="text-2xl font-bold text-foreground">Credit Management</h1>
@@ -405,7 +401,6 @@ export default function Credit() {
             </div>
           </CardContent>
         </Card>
-      </div>
-    </MainLayout>
+    </div>
   );
 }

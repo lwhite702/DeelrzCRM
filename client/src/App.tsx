@@ -1,4 +1,4 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, Redirect, useLocation } from "@/lib/router";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -27,6 +27,8 @@ function Router() {
   const { isAuthenticated, isLoading } = useAuth();
   const { currentTenant } = useTenant();
 
+  console.log("🚦 Router - isAuthenticated:", isAuthenticated, "currentTenant:", currentTenant);
+
   // Show loading while checking authentication
   if (isLoading) {
     return (
@@ -51,71 +53,29 @@ function Router() {
     return (
       <Switch>
         <Route path="/" component={Home} />
-        <Route component={Home} />
+        <Route component={() => <Redirect to="/" />} />
       </Switch>
     );
   }
 
   // Show main application with all routes for authenticated users with selected tenant
   return (
-    <Switch>
-      <Route path="/">
-        <MainLayout>
-          <Dashboard />
-        </MainLayout>
-      </Route>
-      <Route path="/dashboard">
-        <MainLayout>
-          <Dashboard />
-        </MainLayout>
-      </Route>
-      <Route path="/inventory">
-        <MainLayout>
-          <Inventory />
-        </MainLayout>
-      </Route>
-      <Route path="/customers">
-        <MainLayout>
-          <Customers />
-        </MainLayout>
-      </Route>
-      <Route path="/sales">
-        <MainLayout>
-          <SalesPOS />
-        </MainLayout>
-      </Route>
-      <Route path="/delivery">
-        <MainLayout>
-          <Delivery />
-        </MainLayout>
-      </Route>
-      <Route path="/loyalty">
-        <MainLayout>
-          <Loyalty />
-        </MainLayout>
-      </Route>
-      <Route path="/credit">
-        <MainLayout>
-          <Credit />
-        </MainLayout>
-      </Route>
-      <Route path="/payments">
-        <MainLayout>
-          <Payments />
-        </MainLayout>
-      </Route>
-      <Route path="/settings">
-        <MainLayout>
-          <Settings />
-        </MainLayout>
-      </Route>
-      <Route path="/super-admin">
-        <MainLayout>
-          <SuperAdmin />
-        </MainLayout>
-      </Route>
-      <Route component={NotFound} />
-    </Switch>
+    <MainLayout>
+      <Switch>
+        <Route path="/dashboard" component={Dashboard} />
+        <Route path="/inventory" component={Inventory} />
+        <Route path="/customers" component={Customers} />
+        <Route path="/sales" component={SalesPOS} />
+        <Route path="/delivery" component={Delivery} />
+        <Route path="/loyalty" component={Loyalty} />
+        <Route path="/credit" component={Credit} />
+        <Route path="/payments" component={Payments} />
+        <Route path="/settings" component={Settings} />
+        <Route path="/super-admin" component={SuperAdmin} />
+        <Route path="/" component={() => <Redirect to="/dashboard" />} />
+        <Route component={NotFound} />
+      </Switch>
+    </MainLayout>
   );
 }
 

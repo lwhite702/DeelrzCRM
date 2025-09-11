@@ -13,7 +13,6 @@ import { useToast } from "@/hooks/use-toast";
 import { useTenant } from "@/hooks/use-tenant";
 import { useFeatureFlags } from "@/hooks/use-feature-flags";
 import { apiRequest } from "@/lib/queryClient";
-import MainLayout from "@/components/layout/main-layout";
 
 interface TenantSettings {
   tenantId: string;
@@ -110,18 +109,15 @@ export default function Settings() {
 
   if (isLoading || flagsLoading) {
     return (
-      <MainLayout>
-        <div className="p-4 sm:p-6 lg:p-8">
-          <Skeleton className="h-8 w-48 mb-8" />
-          <Skeleton className="h-96 w-full" />
-        </div>
-      </MainLayout>
+      <div className="p-4 sm:p-6 lg:p-8">
+        <Skeleton className="h-8 w-48 mb-8" />
+        <Skeleton className="h-96 w-full" />
+      </div>
     );
   }
 
   return (
-    <MainLayout>
-      <div className="p-4 sm:p-6 lg:p-8">
+    <div className="p-4 sm:p-6 lg:p-8">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8">
           <div>
             <h1 className="text-2xl font-bold text-foreground">Tenant Settings</h1>
@@ -550,7 +546,6 @@ export default function Settings() {
             </Card>
           </TabsContent>
         </Tabs>
-      </div>
-    </MainLayout>
+    </div>
   );
 }

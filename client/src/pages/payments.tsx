@@ -7,7 +7,6 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useTenant } from "@/hooks/use-tenant";
 import { useToast } from "@/hooks/use-toast";
-import MainLayout from "@/components/layout/main-layout";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { PaymentForm } from "@/components/payment-form";
@@ -113,29 +112,25 @@ export default function Payments() {
   // Show loading state if data is still loading
   if (paymentsLoading || statisticsLoading || settingsLoading) {
     return (
-      <MainLayout>
-        <div className="p-4 sm:p-6 lg:p-8">
-          <div className="flex items-center justify-center h-64">
-            <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
-          </div>
+      <div className="p-4 sm:p-6 lg:p-8">
+        <div className="flex items-center justify-center h-64">
+          <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
         </div>
-      </MainLayout>
+      </div>
     );
   }
 
   // Show error state if there's an error
   if (paymentsError) {
     return (
-      <MainLayout>
-        <div className="p-4 sm:p-6 lg:p-8">
-          <div className="text-center text-red-600">
-            <p>Error loading payments: {paymentsError.message}</p>
-            <Button className="mt-4" onClick={() => window.location.reload()}>
-              Retry
-            </Button>
-          </div>
+      <div className="p-4 sm:p-6 lg:p-8">
+        <div className="text-center text-red-600">
+          <p>Error loading payments: {paymentsError.message}</p>
+          <Button className="mt-4" onClick={() => window.location.reload()}>
+            Retry
+          </Button>
         </div>
-      </MainLayout>
+      </div>
     );
   }
 
@@ -164,13 +159,13 @@ export default function Payments() {
   const recentPayments = payments.slice(0, 5); // Show last 5 payments
 
   return (
-    <MainLayout>
+    <>
       <div className="p-4 sm:p-6 lg:p-8">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">Payment Processing</h1>
-            <p className="mt-1 text-sm text-muted-foreground">Manage Stripe integration and payment methods</p>
-          </div>
+            <div>
+              <h1 className="text-2xl font-bold text-foreground">Payment Processing</h1>
+              <p className="mt-1 text-sm text-muted-foreground">Manage Stripe integration and payment methods</p>
+            </div>
           <div className="flex gap-3 mt-4 sm:mt-0">
             <Dialog open={paymentDialogOpen} onOpenChange={setPaymentDialogOpen}>
               <DialogTrigger asChild>
@@ -496,6 +491,6 @@ export default function Payments() {
           </CardContent>
         </Card>
       </div>
-    </MainLayout>
+    </>
   );
 }

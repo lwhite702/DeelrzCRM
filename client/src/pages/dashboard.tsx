@@ -3,6 +3,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTenant } from "@/hooks/use-tenant";
+import { useLocation } from "@/lib/router";
 
 interface DashboardKPIs {
   todayRevenue: string;
@@ -13,6 +14,7 @@ interface DashboardKPIs {
 
 export default function Dashboard() {
   const { currentTenant } = useTenant();
+  const [, setLocation] = useLocation();
   
   const { data: kpis, isLoading } = useQuery<DashboardKPIs>({
     queryKey: ["/api/tenants", currentTenant, "dashboard", "kpis"],
@@ -166,6 +168,7 @@ export default function Dashboard() {
                 variant="outline" 
                 className="h-20 flex flex-col items-center justify-center space-y-2"
                 data-testid="button-new-sale"
+                onClick={() => setLocation("/sales")}
               >
                 <i className="fas fa-plus text-primary text-xl"></i>
                 <span className="text-sm font-medium">New Sale</span>
@@ -174,6 +177,7 @@ export default function Dashboard() {
                 variant="outline" 
                 className="h-20 flex flex-col items-center justify-center space-y-2"
                 data-testid="button-add-inventory"
+                onClick={() => setLocation("/inventory")}
               >
                 <i className="fas fa-box text-primary text-xl"></i>
                 <span className="text-sm font-medium">Add Inventory</span>
@@ -182,6 +186,7 @@ export default function Dashboard() {
                 variant="outline" 
                 className="h-20 flex flex-col items-center justify-center space-y-2"
                 data-testid="button-add-customer"
+                onClick={() => setLocation("/customers")}
               >
                 <i className="fas fa-user-plus text-primary text-xl"></i>
                 <span className="text-sm font-medium">Add Customer</span>
@@ -190,6 +195,7 @@ export default function Dashboard() {
                 variant="outline" 
                 className="h-20 flex flex-col items-center justify-center space-y-2"
                 data-testid="button-view-reports"
+                onClick={() => setLocation("/reports")}
               >
                 <i className="fas fa-chart-bar text-primary text-xl"></i>
                 <span className="text-sm font-medium">View Reports</span>

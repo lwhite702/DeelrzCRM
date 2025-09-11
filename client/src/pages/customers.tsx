@@ -5,7 +5,6 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTenant } from "@/hooks/use-tenant";
-import MainLayout from "@/components/layout/main-layout";
 
 interface Customer {
   id: string;
@@ -47,25 +46,22 @@ export default function Customers() {
 
   if (isLoading) {
     return (
-      <MainLayout>
-        <div className="p-4 sm:p-6 lg:p-8">
-          <div className="mb-8">
-            <Skeleton className="h-8 w-48 mb-2" />
-            <Skeleton className="h-4 w-64" />
-          </div>
-          <Card>
-            <CardContent className="p-6">
-              <Skeleton className="h-96 w-full" />
-            </CardContent>
-          </Card>
+      <div className="p-4 sm:p-6 lg:p-8">
+        <div className="mb-8">
+          <Skeleton className="h-8 w-48 mb-2" />
+          <Skeleton className="h-4 w-64" />
         </div>
-      </MainLayout>
+        <Card>
+          <CardContent className="p-6">
+            <Skeleton className="h-96 w-full" />
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
   return (
-    <MainLayout>
-      <div className="p-4 sm:p-6 lg:p-8">
+    <div className="p-4 sm:p-6 lg:p-8">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8">
           <div>
             <h1 className="text-2xl font-bold text-foreground">Customer Management</h1>
@@ -211,7 +207,6 @@ export default function Customers() {
             )}
           </CardContent>
         </Card>
-      </div>
-    </MainLayout>
+    </div>
   );
 }

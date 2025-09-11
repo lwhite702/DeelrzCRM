@@ -11,7 +11,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import MainLayout from "@/components/layout/main-layout";
 
 interface Tenant {
   id: string;
@@ -221,18 +220,15 @@ export default function SuperAdmin() {
 
   if (tenantsLoading || flagsLoading) {
     return (
-      <MainLayout>
-        <div className="p-4 sm:p-6 lg:p-8">
-          <Skeleton className="h-8 w-48 mb-8" />
-          <Skeleton className="h-96 w-full" />
-        </div>
-      </MainLayout>
+      <div className="p-4 sm:p-6 lg:p-8">
+        <Skeleton className="h-8 w-48 mb-8" />
+        <Skeleton className="h-96 w-full" />
+      </div>
     );
   }
 
   return (
-    <MainLayout>
-      <div className="p-4 sm:p-6 lg:p-8">
+    <div className="p-4 sm:p-6 lg:p-8">
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-foreground">Super Admin Portal</h1>
           <p className="mt-1 text-sm text-muted-foreground">Manage tenants, users, and global settings</p>
@@ -647,7 +643,6 @@ export default function SuperAdmin() {
             </Card>
           </TabsContent>
         </Tabs>
-      </div>
-    </MainLayout>
+    </div>
   );
 }
