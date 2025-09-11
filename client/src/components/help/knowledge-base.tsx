@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +25,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiRequest } from "@/lib/queryClient";
+import { marked } from "marked";
+import DOMPurify from "dompurify";
 import type { KbArticle } from "@shared/schema";
 
 interface KnowledgeBaseProps {
@@ -45,100 +47,92 @@ const CATEGORIES = [
   { value: "other", label: "Other", icon: "📚" },
 ];
 
-// Simple markdown renderer for article content
+// Secure markdown renderer using marked and DOMPurify
 function MarkdownRenderer({ content }: { content: string }) {
-  const renderMarkdown = (text: string) => {
-    // Split content into blocks
-    const blocks = text.split('\n\n').filter(block => block.trim());
-    
-    return blocks.map((block, index) => {
-      const trimmedBlock = block.trim();
+  const sanitizedHtml = useMemo(() => {
+    try {
+      // Configure marked for security and features
+      marked.setOptions({
+        breaks: true,
+        gfm: true,
+      });
       
-      // Headers
-      if (trimmedBlock.startsWith('# ')) {
-        return (
-          <h1 key={index} className="text-2xl font-bold text-foreground mb-4 mt-6 first:mt-0">
-            {trimmedBlock.slice(2)}
-          </h1>
-        );
-      }
-      if (trimmedBlock.startsWith('## ')) {
-        return (
-          <h2 key={index} className="text-xl font-semibold text-foreground mb-3 mt-5">
-            {trimmedBlock.slice(3)}
-          </h2>
-        );
-      }
-      if (trimmedBlock.startsWith('### ')) {
-        return (
-          <h3 key={index} className="text-lg font-medium text-foreground mb-2 mt-4">
-            {trimmedBlock.slice(4)}
-          </h3>
-        );
-      }
+      const renderer = new marked.Renderer();
       
-      // Code blocks
-      if (trimmedBlock.startsWith('```')) {
-        const lines = trimmedBlock.split('\n');
-        const language = lines[0].slice(3);
-        const code = lines.slice(1, -1).join('\n');
-        return (
-          <pre key={index} className="bg-muted p-4 rounded-lg overflow-x-auto mb-4">
-            <code className="text-sm font-mono">{code}</code>
-          </pre>
-        );
-      }
+      // Secure link rendering - open external links in new tab
+      renderer.link = ({ href, title, tokens }) => {
+        const text = tokens?.[0]?.raw || href || '';
+        const isExternal = href && (href.startsWith('http://') || href.startsWith('https://'));
+        return `<a href="${href}" ${title ? `title="${title}"` : ''} ${isExternal ? 'target="_blank" rel="noopener noreferrer"' : ''} class="text-primary hover:underline">${text}</a>`;
+      };
       
-      // Lists
-      if (trimmedBlock.includes('\n- ') || trimmedBlock.startsWith('- ')) {
-        const items = trimmedBlock.split('\n').filter(line => line.startsWith('- '));
-        return (
-          <ul key={index} className="list-disc list-inside space-y-1 mb-4 text-muted-foreground">
-            {items.map((item, i) => (
-              <li key={i}>{item.slice(2)}</li>
-            ))}
-          </ul>
-        );
-      }
+      // Custom code block styling
+      renderer.code = ({ text, lang, escaped }) => {
+        return `<pre class="bg-muted p-4 rounded-lg overflow-x-auto mb-4"><code class="text-sm font-mono">${escaped ? text : text}</code></pre>`;
+      };
       
-      // Numbered lists
-      if (/^\d+\./.test(trimmedBlock)) {
-        const items = trimmedBlock.split('\n').filter(line => /^\d+\./.test(line));
-        return (
-          <ol key={index} className="list-decimal list-inside space-y-1 mb-4 text-muted-foreground">
-            {items.map((item, i) => (
-              <li key={i}>{item.replace(/^\d+\.\s*/, '')}</li>
-            ))}
-          </ol>
-        );
-      }
+      // Custom inline code styling
+      renderer.codespan = ({ text }) => {
+        return `<code class="bg-muted px-1 py-0.5 rounded text-sm font-mono">${text}</code>`;
+      };
       
-      // Regular paragraphs - handle inline formatting
-      let content = trimmedBlock;
+      // Custom heading styling
+      renderer.heading = ({ text, depth }) => {
+        const classes = {
+          1: 'text-2xl font-bold text-foreground mb-4 mt-6 first:mt-0',
+          2: 'text-xl font-semibold text-foreground mb-3 mt-5',
+          3: 'text-lg font-medium text-foreground mb-2 mt-4',
+          4: 'text-base font-medium text-foreground mb-2 mt-3',
+          5: 'text-sm font-medium text-foreground mb-1 mt-2',
+          6: 'text-xs font-medium text-foreground mb-1 mt-2',
+        };
+        return `<h${depth} class="${classes[depth as keyof typeof classes] || ''}">${text}</h${depth}>`;
+      };
       
-      // Bold text
-      content = content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      // Custom list styling
+      renderer.list = ({ ordered, start, items }) => {
+        const tag = ordered ? 'ol' : 'ul';
+        const listClass = ordered ? 'list-decimal list-inside space-y-1 mb-4 text-muted-foreground' : 'list-disc list-inside space-y-1 mb-4 text-muted-foreground';
+        const startAttr = ordered && start !== 1 ? ` start="${start}"` : '';
+        return `<${tag} class="${listClass}"${startAttr}>\n${items}\n</${tag}>\n`;
+      };
       
-      // Italic text
-      content = content.replace(/\*(.*?)\*/g, '<em>$1</em>');
+      // Custom paragraph styling
+      renderer.paragraph = ({ text }) => {
+        return `<p class="text-muted-foreground leading-relaxed mb-4">${text}</p>`;
+      };
       
-      // Inline code
-      content = content.replace(/`(.*?)`/g, '<code class="bg-muted px-1 py-0.5 rounded text-sm font-mono">$1</code>');
+      // Parse markdown with configured renderer
+      const html = marked(content || '', { renderer });
       
-      // Links
-      content = content.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-primary hover:underline" target="_blank" rel="noopener noreferrer">$1</a>');
-      
-      return (
-        <p 
-          key={index} 
-          className="text-muted-foreground leading-relaxed mb-4"
-          dangerouslySetInnerHTML={{ __html: content }}
-        />
-      );
-    });
-  };
+      // Sanitize HTML to prevent XSS attacks
+      return DOMPurify.sanitize(html, {
+        ALLOWED_TAGS: [
+          'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+          'p', 'br', 'strong', 'em', 'u', 's',
+          'ul', 'ol', 'li',
+          'a', 'code', 'pre',
+          'blockquote',
+        ],
+        ALLOWED_ATTR: [
+          'href', 'title', 'target', 'rel', 'class',
+          'start'
+        ],
+        ALLOW_DATA_ATTR: false,
+        ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
+      });
+    } catch (error) {
+      console.error('Markdown rendering error:', error);
+      return '<p class="text-destructive">Error rendering content</p>';
+    }
+  }, [content]);
 
-  return <div className="prose prose-sm max-w-none">{renderMarkdown(content)}</div>;
+  return (
+    <div 
+      className="prose prose-sm max-w-none"
+      dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
+    />
+  );
 }
 
 export function KnowledgeBase({

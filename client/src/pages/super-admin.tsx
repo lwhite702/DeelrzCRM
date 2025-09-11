@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Card, CardContent } from "@/components/ui/card";
+import { Link } from "@/lib/router";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -235,10 +236,11 @@ export default function SuperAdmin() {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="tenants" data-testid="tab-tenants">Tenants</TabsTrigger>
             <TabsTrigger value="users" data-testid="tab-users">Users</TabsTrigger>
             <TabsTrigger value="feature-flags" data-testid="tab-feature-flags">Feature Flags</TabsTrigger>
+            <TabsTrigger value="kb-management" data-testid="tab-kb-management">KB Management</TabsTrigger>
             <TabsTrigger value="system" data-testid="tab-system">System</TabsTrigger>
           </TabsList>
 
@@ -524,6 +526,163 @@ export default function SuperAdmin() {
                         ))}
                       </SelectContent>
                     </Select>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="kb-management" className="space-y-6">
+            {/* KB Management Overview */}
+            <Card className="bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-200">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                    <i className="fas fa-book-open text-blue-600"></i>
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-medium text-blue-900">Knowledge Base Management</h3>
+                    <p className="text-sm text-blue-600 font-normal">
+                      Manage articles, categories, and help content for all tenants
+                    </p>
+                  </div>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div className="bg-white/50 rounded-lg p-4 border border-blue-100">
+                      <div className="flex items-center gap-2 mb-2">
+                        <i className="fas fa-file-text text-blue-600"></i>
+                        <span className="font-medium text-blue-900">Create Articles</span>
+                      </div>
+                      <p className="text-sm text-blue-700">
+                        Create global articles or tenant-specific help content with markdown editor
+                      </p>
+                    </div>
+                    
+                    <div className="bg-white/50 rounded-lg p-4 border border-blue-100">
+                      <div className="flex items-center gap-2 mb-2">
+                        <i className="fas fa-search text-blue-600"></i>
+                        <span className="font-medium text-blue-900">Manage Content</span>
+                      </div>
+                      <p className="text-sm text-blue-700">
+                        Search, filter, and bulk update articles across all categories and tenants
+                      </p>
+                    </div>
+                    
+                    <div className="bg-white/50 rounded-lg p-4 border border-blue-100">
+                      <div className="flex items-center gap-2 mb-2">
+                        <i className="fas fa-chart-bar text-blue-600"></i>
+                        <span className="font-medium text-blue-900">Analytics</span>
+                      </div>
+                      <p className="text-sm text-blue-700">
+                        Track article performance, user feedback, and content usage
+                      </p>
+                    </div>
+                  </div>
+                  
+                  <div className="pt-4 border-t border-blue-200">
+                    <Link href="/admin/kb-management">
+                      <Button className="bg-blue-600 hover:bg-blue-700 text-white" data-testid="button-open-kb-management">
+                        <i className="fas fa-external-link-alt mr-2"></i>
+                        Open KB Management Console
+                      </Button>
+                    </Link>
+                  </div>
+                  
+                  <div className="text-xs text-blue-600 bg-blue-50 rounded p-3 border border-blue-100">
+                    <div className="flex items-start gap-2">
+                      <i className="fas fa-info-circle mt-0.5"></i>
+                      <div>
+                        <p className="font-medium mb-1">Access Requirements:</p>
+                        <p>Knowledge Base Management requires Super Admin privileges. You can create both global articles (visible to all tenants) and tenant-specific articles.</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Quick Actions */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Quick Actions</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <Link href="/admin/kb-management">
+                    <Button variant="outline" className="w-full h-auto p-4 flex flex-col items-center gap-2" data-testid="button-create-article">
+                      <i className="fas fa-plus-circle text-xl text-green-600"></i>
+                      <span className="font-medium">Create New Article</span>
+                      <span className="text-xs text-muted-foreground">Write a new help article</span>
+                    </Button>
+                  </Link>
+                  
+                  <Link href="/admin/kb-management">
+                    <Button variant="outline" className="w-full h-auto p-4 flex flex-col items-center gap-2" data-testid="button-manage-articles">
+                      <i className="fas fa-list text-xl text-blue-600"></i>
+                      <span className="font-medium">Manage Articles</span>
+                      <span className="text-xs text-muted-foreground">Edit existing articles</span>
+                    </Button>
+                  </Link>
+                  
+                  <Link href="/admin/kb-management">
+                    <Button variant="outline" className="w-full h-auto p-4 flex flex-col items-center gap-2" data-testid="button-bulk-operations">
+                      <i className="fas fa-tasks text-xl text-purple-600"></i>
+                      <span className="font-medium">Bulk Operations</span>
+                      <span className="text-xs text-muted-foreground">Update multiple articles</span>
+                    </Button>
+                  </Link>
+                  
+                  <Link href="/admin/kb-management">
+                    <Button variant="outline" className="w-full h-auto p-4 flex flex-col items-center gap-2" data-testid="button-analytics">
+                      <i className="fas fa-chart-line text-xl text-orange-600"></i>
+                      <span className="font-medium">View Analytics</span>
+                      <span className="text-xs text-muted-foreground">Article usage stats</span>
+                    </Button>
+                  </Link>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* KB Categories Overview */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Article Categories</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="p-4 border rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
+                      <span className="font-medium">Getting Started</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Onboarding and basic tutorials</p>
+                  </div>
+                  
+                  <div className="p-4 border rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                      <span className="font-medium">Features</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Feature guides and how-tos</p>
+                  </div>
+                  
+                  <div className="p-4 border rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-3 h-3 bg-orange-500 rounded-full"></div>
+                      <span className="font-medium">Troubleshooting</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Common issues and solutions</p>
+                  </div>
+                  
+                  <div className="p-4 border rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-3 h-3 bg-purple-500 rounded-full"></div>
+                      <span className="font-medium">Other Categories</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">API, Billing, Integrations</p>
                   </div>
                 </div>
               </CardContent>
