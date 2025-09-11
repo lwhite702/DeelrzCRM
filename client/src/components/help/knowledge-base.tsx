@@ -102,6 +102,27 @@ function MarkdownRenderer({ content }: { content: string }) {
         return `<p class="text-muted-foreground leading-relaxed mb-4">${text}</p>`;
       };
       
+      // Custom image rendering with responsive styling - SECURE (no inline event handlers)
+      renderer.image = ({ href, title, text }) => {
+        const titleAttr = title ? ` title="${title}"` : '';
+        const altText = text || 'Uploaded image';
+        
+        return `
+          <div class="my-6 flex justify-center">
+            <div class="max-w-full overflow-hidden rounded-lg border bg-muted/20">
+              <img 
+                src="${href}" 
+                alt="${altText}"${titleAttr}
+                loading="lazy"
+                class="max-w-full h-auto object-contain transition-opacity duration-200 hover:opacity-90"
+                style="max-height: 500px"
+              />
+              <div class="hidden p-8 text-center text-muted-foreground error-fallback">Image failed to load</div>
+            </div>
+          </div>
+        `;
+      };
+      
       // Parse markdown with configured renderer
       const html = marked(content || '', { renderer });
       
@@ -112,14 +133,15 @@ function MarkdownRenderer({ content }: { content: string }) {
           'p', 'br', 'strong', 'em', 'u', 's',
           'ul', 'ol', 'li',
           'a', 'code', 'pre',
-          'blockquote',
+          'blockquote', 'img', 'div'
         ],
         ALLOWED_ATTR: [
           'href', 'title', 'target', 'rel', 'class',
-          'start'
+          'start', 'src', 'alt', 'width', 'height',
+          'loading', 'style'
         ],
         ALLOW_DATA_ATTR: false,
-        ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
+        ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$)|\/)/i
       });
     } catch (error) {
       console.error('Markdown rendering error:', error);

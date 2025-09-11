@@ -1,12 +1,17 @@
 import { useState, useRef, useCallback, useMemo } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import { useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { useToast } from "@/hooks/use-toast";
 import { 
   Bold, 
   Italic, 
@@ -22,6 +27,9 @@ import {
   Heading2,
   Heading3,
   Image,
+  Upload,
+  X,
+  Loader2,
   Minus
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -37,6 +45,9 @@ interface MarkdownEditorProps {
   disabled?: boolean;
   error?: string;
   showPreview?: boolean;
+  tenantId?: string;
+  articleId?: string;
+  enableImageUpload?: boolean;
 }
 
 interface ToolbarButton {
@@ -44,6 +55,14 @@ interface ToolbarButton {
   title: string;
   action: (textarea: HTMLTextAreaElement) => void;
   shortcut?: string;
+}
+
+interface UploadedImage {
+  filename: string;
+  originalName: string;
+  url: string;
+  size: number;
+  mimetype: string;
 }
 
 export function MarkdownEditor({
@@ -56,11 +75,174 @@ export function MarkdownEditor({
   minHeight = "200px",
   disabled = false,
   error,
-  showPreview = true
+  showPreview = true,
+  tenantId,
+  articleId,
+  enableImageUpload = false
 }: MarkdownEditorProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [activeView, setActiveView] = useState<"edit" | "preview" | "split">("split");
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [uploadingFiles, setUploadingFiles] = useState<string[]>([]);
+  const { toast } = useToast();
+
+  // Image upload mutation
+  const uploadImagesMutation = useMutation({
+    mutationFn: async (files: File[]) => {
+      const formData = new FormData();
+      files.forEach(file => formData.append('images', file));
+      
+      // Determine upload endpoint based on context
+      let uploadUrl = '/api/help/uploads';
+      if (tenantId && articleId) {
+        uploadUrl = `/api/help/uploads/${tenantId}/${articleId}`;
+      } else if (tenantId) {
+        uploadUrl = `/api/help/uploads/${tenantId}`;
+      }
+      
+      const response = await fetch(uploadUrl, {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Upload failed');
+      }
+      
+      return await response.json();
+    },
+    onSuccess: (data: { files: UploadedImage[] }) => {
+      // Insert uploaded images into markdown
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      
+      const imageMarkdown = data.files
+        .map(file => `![${file.originalName}](${file.url})`)
+        .join('\n');
+      
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const newText = value.substring(0, start) + 
+                      (start > 0 && value[start - 1] !== '\n' ? '\n' : '') +
+                      imageMarkdown + 
+                      (end < value.length && value[end] !== '\n' ? '\n' : '') +
+                      value.substring(end);
+      
+      onChange(newText);
+      
+      // Update cursor position
+      setTimeout(() => {
+        const newCursorPos = start + imageMarkdown.length + 2;
+        textarea.focus();
+        textarea.setSelectionRange(newCursorPos, newCursorPos);
+      }, 0);
+      
+      toast({
+        title: "Images uploaded successfully",
+        description: `${data.files.length} image(s) uploaded and inserted into the editor.`,
+      });
+      
+      setUploadProgress(null);
+      setUploadingFiles([]);
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Upload failed",
+        description: error.message,
+        variant: "destructive",
+      });
+      setUploadProgress(null);
+      setUploadingFiles([]);
+    },
+  });
+
+  // File validation
+  const validateFiles = (files: File[]): File[] => {
+    const validFiles: File[] = [];
+    const errors: string[] = [];
+    
+    for (const file of files) {
+      // Check file type
+      if (!file.type.startsWith('image/')) {
+        errors.push(`${file.name}: Only image files are allowed`);
+        continue;
+      }
+      
+      // Check file size (5MB limit)
+      if (file.size > 5 * 1024 * 1024) {
+        errors.push(`${file.name}: File size must be less than 5MB`);
+        continue;
+      }
+      
+      validFiles.push(file);
+    }
+    
+    if (errors.length > 0) {
+      toast({
+        title: "Invalid files",
+        description: errors.join(', '),
+        variant: "destructive",
+      });
+    }
+    
+    return validFiles;
+  };
+
+  // Handle file selection
+  const handleFileSelect = (files: FileList | null) => {
+    if (!files || files.length === 0 || !enableImageUpload) return;
+    
+    const fileArray = Array.from(files);
+    const validFiles = validateFiles(fileArray);
+    
+    if (validFiles.length > 0) {
+      setUploadingFiles(validFiles.map(f => f.name));
+      setUploadProgress(0);
+      uploadImagesMutation.mutate(validFiles);
+    }
+  };
+
+  // Drag and drop handlers
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (enableImageUpload && !disabled) {
+      setIsDragging(true);
+    }
+  }, [enableImageUpload, disabled]);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    
+    if (!enableImageUpload || disabled) return;
+    
+    const files = e.dataTransfer.files;
+    handleFileSelect(files);
+  }, [enableImageUpload, disabled]);
+
+  // Enhanced image upload action for toolbar
+  const handleImageUpload = () => {
+    if (!enableImageUpload || disabled) {
+      // Fallback to simple markdown insertion
+      insertTextAtCursor('![', '](image-url)', 'alt text');
+      return;
+    }
+    
+    fileInputRef.current?.click();
+  };
 
   // Configure marked for security and features
   const renderer = useMemo(() => {
@@ -94,14 +276,15 @@ export function MarkdownEditor({
           'a', 'code', 'pre',
           'blockquote', 'hr',
           'table', 'thead', 'tbody', 'tr', 'th', 'td',
-          'del', 'ins'
+          'del', 'ins', 'img'
         ],
         ALLOWED_ATTR: [
           'href', 'title', 'target', 'rel', 'class',
-          'start', 'type'
+          'start', 'type', 'src', 'alt', 'width', 'height',
+          'loading', 'style'
         ],
         ALLOW_DATA_ATTR: false,
-        ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
+        ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$)|\/)/i
       });
     } catch (error) {
       console.error('Markdown parsing error:', error);
@@ -236,9 +419,9 @@ export function MarkdownEditor({
       action: () => insertTextAtCursor('[', '](url)', 'link text')
     },
     {
-      icon: <Image className="w-4 h-4" />,
-      title: "Image",
-      action: () => insertTextAtCursor('![', '](image-url)', 'alt text')
+      icon: enableImageUpload ? <Upload className="w-4 h-4" /> : <Image className="w-4 h-4" />,
+      title: enableImageUpload ? "Upload Image" : "Image",
+      action: handleImageUpload
     },
     {
       icon: <Minus className="w-4 h-4" />,
@@ -356,17 +539,49 @@ export function MarkdownEditor({
         <div className={cn("flex", effectiveView === "split" && "divide-x")}>
           {/* Editor */}
           {(effectiveView === "edit" || effectiveView === "split") && (
-            <div className={cn("flex-1", effectiveView === "split" && "w-1/2")}>
+            <div className={cn("flex-1 relative", effectiveView === "split" && "w-1/2")}>
+              {/* Drag & Drop Overlay */}
+              {enableImageUpload && isDragging && (
+                <div className="absolute inset-0 z-10 flex items-center justify-center bg-primary/10 border-2 border-dashed border-primary rounded-lg">
+                  <div className="text-center">
+                    <Upload className="w-8 h-8 mx-auto mb-2 text-primary" />
+                    <p className="text-sm font-medium text-primary">Drop images here to upload</p>
+                  </div>
+                </div>
+              )}
+              
+              {/* Upload Progress */}
+              {enableImageUpload && uploadProgress !== null && (
+                <div className="absolute top-2 left-2 right-2 z-10">
+                  <Card className="p-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span className="text-sm font-medium">Uploading images...</span>
+                    </div>
+                    <Progress value={uploadProgress} className="w-full" />
+                    {uploadingFiles.length > 0 && (
+                      <div className="mt-2 text-xs text-muted-foreground">
+                        {uploadingFiles.join(', ')}
+                      </div>
+                    )}
+                  </Card>
+                </div>
+              )}
+              
               <Textarea
                 ref={textareaRef}
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
                 onKeyDown={handleKeyDown}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
                 placeholder={placeholder}
                 disabled={disabled}
                 className={cn(
                   "min-h-[200px] border-0 resize-none rounded-none font-mono text-sm leading-relaxed focus:ring-0 focus-visible:ring-0",
-                  effectiveView === "split" && "rounded-l-lg"
+                  effectiveView === "split" && "rounded-l-lg",
+                  enableImageUpload && isDragging && "opacity-50"
                 )}
                 style={{ 
                   height: typeof height === 'number' ? `${height}px` : height,
@@ -415,6 +630,19 @@ export function MarkdownEditor({
         </div>
       )}
 
+      {/* Hidden file input for image uploads */}
+      {enableImageUpload && (
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept="image/*"
+          onChange={(e) => handleFileSelect(e.target.files)}
+          className="hidden"
+          data-testid="input-image-upload"
+        />
+      )}
+
       {/* Help Text */}
       <div className="mt-2 text-xs text-muted-foreground">
         <span>Supports </span>
@@ -427,6 +655,7 @@ export function MarkdownEditor({
           Markdown syntax
         </a>
         <span>. Use Ctrl+B for bold, Ctrl+I for italic, Ctrl+` for code.</span>
+        {enableImageUpload && <span> Drag & drop images to upload them instantly.</span>}
       </div>
     </div>
   );

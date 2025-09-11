@@ -13,6 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useTenant } from "@/contexts/tenant-context";
 import { useFeatureFlags } from "@/hooks/use-feature-flags";
 import { apiRequest } from "@/lib/queryClient";
+import { TooltipHelp } from "@/components/ui/tooltip-help";
 
 interface TenantSettings {
   tenantId: string;
@@ -120,16 +121,20 @@ export default function Settings() {
     <div className="p-4 sm:p-6 lg:p-8">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8">
           <div>
-            <h1 className="text-2xl font-bold text-foreground">Tenant Settings</h1>
+            <TooltipHelp content="Settings allow you to configure your pharmacy's operational parameters, inventory thresholds, payment processing, and feature flags. Changes affect how your system operates." articleSlug="getting-started-guide">
+              <h1 className="text-2xl font-bold text-foreground">Tenant Settings</h1>
+            </TooltipHelp>
             <p className="mt-1 text-sm text-muted-foreground">Configure your pharmacy operations and preferences</p>
           </div>
-          <Button 
-            onClick={handleSave}
-            disabled={updateSettingsMutation.isPending}
-            data-testid="button-save-settings"
-          >
-            {updateSettingsMutation.isPending ? "Saving..." : "Save Settings"}
-          </Button>
+          <TooltipHelp content="Save all your configuration changes. Settings are applied immediately and affect your pharmacy's operations." side="bottom">
+            <Button 
+              onClick={handleSave}
+              disabled={updateSettingsMutation.isPending}
+              data-testid="button-save-settings"
+            >
+              {updateSettingsMutation.isPending ? "Saving..." : "Save Settings"}
+            </Button>
+          </TooltipHelp>
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
@@ -144,13 +149,17 @@ export default function Settings() {
           <TabsContent value="general" className="space-y-6">
             <Card>
               <CardContent className="p-6">
-                <h3 className="text-lg font-medium text-foreground mb-4">General Settings</h3>
+                <TooltipHelp content="General settings control your pharmacy's core operational parameters including profit margins, credit limits, and default currency." side="top">
+                  <h3 className="text-lg font-medium text-foreground mb-4">General Settings</h3>
+                </TooltipHelp>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
-                    <Label htmlFor="target-margin" className="text-sm font-medium text-foreground">
-                      Target Margin (%)
-                    </Label>
+                    <TooltipHelp content="Target margin is your desired profit percentage. This is used in pricing calculations and helps maintain profitability across your inventory." side="right">
+                      <Label htmlFor="target-margin" className="text-sm font-medium text-foreground">
+                        Target Margin (%)
+                      </Label>
+                    </TooltipHelp>
                     <Input
                       id="target-margin"
                       type="number"
@@ -211,13 +220,17 @@ export default function Settings() {
           <TabsContent value="inventory" className="space-y-6">
             <Card>
               <CardContent className="p-6">
-                <h3 className="text-lg font-medium text-foreground mb-4">Inventory Management</h3>
+                <TooltipHelp content="Inventory management settings control stock monitoring thresholds, lead times, and automated reordering policies." articleSlug="inventory-management-guide">
+                  <h3 className="text-lg font-medium text-foreground mb-4">Inventory Management</h3>
+                </TooltipHelp>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
-                    <Label htmlFor="min-stock-threshold" className="text-sm font-medium text-foreground">
-                      Minimum Stock Threshold
-                    </Label>
+                    <TooltipHelp content="Set the minimum stock level that triggers low stock alerts. When inventory falls below this threshold, you'll receive notifications to reorder." side="top">
+                      <Label htmlFor="min-stock-threshold" className="text-sm font-medium text-foreground">
+                        Minimum Stock Threshold
+                      </Label>
+                    </TooltipHelp>
                     <Input
                       id="min-stock-threshold"
                       type="number"
@@ -299,11 +312,15 @@ export default function Settings() {
           <TabsContent value="delivery" className="space-y-6">
             <Card>
               <CardContent className="p-6">
-                <h3 className="text-lg font-medium text-foreground mb-4">Delivery Configuration</h3>
+                <TooltipHelp content="Configure which delivery methods are available to your customers. Enable pickup, manual courier, or other delivery options based on your pharmacy's capabilities." side="top">
+                  <h3 className="text-lg font-medium text-foreground mb-4">Delivery Configuration</h3>
+                </TooltipHelp>
                 
                 <div className="space-y-6">
                   <div>
-                    <Label className="text-sm font-medium text-foreground">Enabled Delivery Methods</Label>
+                    <TooltipHelp content="Choose which delivery methods customers can select during checkout. Options include pharmacy pickup and manual courier delivery." side="right">
+                      <Label className="text-sm font-medium text-foreground">Enabled Delivery Methods</Label>
+                    </TooltipHelp>
                     <div className="mt-2 space-y-3">
                       <div className="flex items-center justify-between">
                         <div>
@@ -375,11 +392,15 @@ export default function Settings() {
           <TabsContent value="payments" className="space-y-6">
             <Card>
               <CardContent className="p-6">
-                <h3 className="text-lg font-medium text-foreground mb-4">Payment Processing</h3>
+                <TooltipHelp content="Configure how your pharmacy processes payments. Choose between platform mode (shared processing) or connect your own Stripe account for direct payment processing." articleSlug="billing-payment-info">
+                  <h3 className="text-lg font-medium text-foreground mb-4">Payment Processing</h3>
+                </TooltipHelp>
                 
                 <div className="space-y-6">
                   <div>
-                    <Label className="text-sm font-medium text-foreground">Payment Mode</Label>
+                    <TooltipHelp content="Payment mode determines how transactions are processed. Platform mode uses shared processing, while Connect modes allow you to use your own Stripe account." side="right">
+                      <Label className="text-sm font-medium text-foreground">Payment Mode</Label>
+                    </TooltipHelp>
                     <Select 
                       value={localSettings.paymentMode || ""} 
                       onValueChange={(value) => handleSettingChange("paymentMode", value)}
@@ -489,7 +510,9 @@ export default function Settings() {
           <TabsContent value="features" className="space-y-6">
             <Card>
               <CardContent className="p-6">
-                <h3 className="text-lg font-medium text-foreground mb-4">Feature Modules</h3>
+                <TooltipHelp content="Feature modules allow you to enable or disable specific functionality within your pharmacy system. Toggle features based on your business needs and operational requirements." side="top">
+                  <h3 className="text-lg font-medium text-foreground mb-4">Feature Modules</h3>
+                </TooltipHelp>
                 
                 <div className="space-y-4">
                   {featureFlags && Object.entries(featureFlags).map(([flagKey, enabled]) => {

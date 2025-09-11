@@ -1,6 +1,9 @@
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { useTenant } from "@/contexts/tenant-context";
+import { HelpOverlay } from "@/components/help/help-overlay";
+import { HelpCircle } from "lucide-react";
 
 interface HeaderProps {
   onMobileMenuToggle: () => void;
@@ -10,6 +13,7 @@ interface HeaderProps {
 export default function Header({ onMobileMenuToggle, tenantName }: HeaderProps) {
   const { user } = useAuth();
   const { clearTenant } = useTenant();
+  const [helpOverlayOpen, setHelpOverlayOpen] = useState(false);
 
   const handleLogout = () => {
     clearTenant();
@@ -20,6 +24,20 @@ export default function Header({ onMobileMenuToggle, tenantName }: HeaderProps) 
     if (!firstName && !lastName) return "U";
     return `${firstName?.[0] || ""}${lastName?.[0] || ""}`.toUpperCase();
   };
+
+  // Global keyboard shortcuts for help
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+? or F1 to open help
+      if ((e.ctrlKey && e.key === "?") || e.key === "F1") {
+        e.preventDefault();
+        setHelpOverlayOpen(true);
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   return (
     <header className="bg-card border-b border-border sticky top-0 z-40">
@@ -48,6 +66,18 @@ export default function Header({ onMobileMenuToggle, tenantName }: HeaderProps) 
           </div>
           
           <div className="flex items-center space-x-4">
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              className="p-2"
+              onClick={() => setHelpOverlayOpen(true)}
+              title="Help (Ctrl+? or F1)"
+              data-testid="button-global-help"
+            >
+              <HelpCircle className="w-5 h-5" />
+              <span className="sr-only">Help</span>
+            </Button>
+            
             <Button variant="ghost" size="sm" className="p-2">
               <i className="fas fa-bell text-lg"></i>
               <span className="sr-only">Notifications</span>
@@ -78,6 +108,11 @@ export default function Header({ onMobileMenuToggle, tenantName }: HeaderProps) 
           </div>
         </div>
       </div>
+      
+      <HelpOverlay 
+        open={helpOverlayOpen} 
+        onOpenChange={setHelpOverlayOpen} 
+      />
     </header>
   );
 }

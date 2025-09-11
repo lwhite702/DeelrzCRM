@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Skeleton } from "@/components/ui/skeleton";
+import { TooltipHelp } from "@/components/ui/tooltip-help";
 import { useToast } from "@/hooks/use-toast";
 import { useTenant } from "@/contexts/tenant-context";
 import { apiRequest } from "@/lib/queryClient";
@@ -260,7 +261,9 @@ export default function SalesPOS() {
   return (
     <div className="p-4 sm:p-6 lg:p-8">
         <div className="mb-8">
-          <h1 className="text-2xl font-bold text-foreground">Sales Point of Sale</h1>
+          <TooltipHelp content="The Sales Point of Sale system allows you to process customer transactions, add products to cart, calculate pricing, and complete payments. Use the calculators to help determine quantities and pricing." articleSlug="sales-pos-overview">
+            <h1 className="text-2xl font-bold text-foreground">Sales Point of Sale</h1>
+          </TooltipHelp>
           <p className="mt-1 text-sm text-muted-foreground">Process customer transactions and manage orders</p>
         </div>
 
@@ -269,15 +272,19 @@ export default function SalesPOS() {
           <div className="lg:col-span-2">
             <Card className="mb-6">
               <CardContent className="p-6">
-                <h3 className="text-lg font-medium text-foreground mb-4">Product Selection</h3>
+                <TooltipHelp content="Search and select products to add to the customer's cart. Click on any product card to add it to the order. Prices are calculated automatically based on quantity and current pricing rules." side="right">
+                  <h3 className="text-lg font-medium text-foreground mb-4">Product Selection</h3>
+                </TooltipHelp>
                 
                 <div className="mb-4">
-                  <Input
-                    placeholder="Search products..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    data-testid="input-product-search"
-                  />
+                  <TooltipHelp content="Search products by name or NDC code. Start typing to filter the product list and find items quickly." side="bottom">
+                    <Input
+                      placeholder="Search products..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      data-testid="input-product-search"
+                    />
+                  </TooltipHelp>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-96 overflow-y-auto">
@@ -317,7 +324,9 @@ export default function SalesPOS() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Card>
                 <CardContent className="p-4">
-                  <h4 className="text-sm font-medium text-foreground mb-3">Qty → Price Calculator</h4>
+                  <TooltipHelp content="Calculate the total price for a specific quantity of a product. This helps determine costs before adding items to the cart." side="top">
+                    <h4 className="text-sm font-medium text-foreground mb-3">Qty → Price Calculator</h4>
+                  </TooltipHelp>
                   <div className="space-y-3">
                     <div>
                       <Label className="text-xs text-muted-foreground">Product</Label>
@@ -368,7 +377,9 @@ export default function SalesPOS() {
 
               <Card>
                 <CardContent className="p-4">
-                  <h4 className="text-sm font-medium text-foreground mb-3">Amount → Suggested Qty</h4>
+                  <TooltipHelp content="Enter a target amount and get the suggested quantity that best matches that price. Useful when customers have a specific budget in mind." side="top">
+                    <h4 className="text-sm font-medium text-foreground mb-3">Amount → Suggested Qty</h4>
+                  </TooltipHelp>
                   <div className="space-y-3">
                     <div>
                       <Label className="text-xs text-muted-foreground">Product</Label>

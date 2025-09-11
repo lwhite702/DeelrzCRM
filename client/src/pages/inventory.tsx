@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { TooltipHelp } from "@/components/ui/tooltip-help";
 import { useTenant } from "@/contexts/tenant-context";
 
 interface Product {
@@ -54,18 +55,24 @@ export default function Inventory() {
     <div className="p-4 sm:p-6 lg:p-8">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8">
           <div>
-            <h1 className="text-2xl font-bold text-foreground">Inventory Management</h1>
+            <TooltipHelp content="Inventory management allows you to track medications, products, and stock levels. Monitor current inventory, set reorder points, and manage product information from this central hub." articleSlug="inventory-overview">
+              <h1 className="text-2xl font-bold text-foreground">Inventory Management</h1>
+            </TooltipHelp>
             <p className="mt-1 text-sm text-muted-foreground">Manage medications, products, and stock levels</p>
           </div>
           <div className="flex space-x-3 mt-4 sm:mt-0">
-            <Button variant="secondary" data-testid="button-add-batch">
-              <i className="fas fa-plus mr-2"></i>
-              Add Batch
-            </Button>
-            <Button data-testid="button-add-product">
-              <i className="fas fa-pills mr-2"></i>
-              Add Product
-            </Button>
+            <TooltipHelp content="Add a new batch of products to your inventory. Batches track supplier information, acquisition costs, and expiration dates for better inventory management." side="bottom">
+              <Button variant="secondary" data-testid="button-add-batch">
+                <i className="fas fa-plus mr-2"></i>
+                Add Batch
+              </Button>
+            </TooltipHelp>
+            <TooltipHelp content="Add a new product to your inventory catalog. Include product details, NDC codes, and set minimum stock thresholds for automated reorder alerts." side="bottom">
+              <Button data-testid="button-add-product">
+                <i className="fas fa-pills mr-2"></i>
+                Add Product
+              </Button>
+            </TooltipHelp>
           </div>
         </div>
 
@@ -74,7 +81,9 @@ export default function Inventory() {
           <CardContent className="p-6">
             <div className="flex flex-col lg:flex-row space-y-4 lg:space-y-0 lg:space-x-4">
               <div className="flex-1">
-                <Label htmlFor="search">Search Products</Label>
+                <TooltipHelp content="Search products by name, NDC code, or description. Use partial matches to quickly find specific items in your inventory." side="right">
+                  <Label htmlFor="search">Search Products</Label>
+                </TooltipHelp>
                 <Input 
                   id="search" 
                   placeholder="Search by name, NDC code, or description"
@@ -97,7 +106,9 @@ export default function Inventory() {
                 </Select>
               </div>
               <div className="w-full lg:w-48">
-                <Label htmlFor="stock-status">Stock Status</Label>
+                <TooltipHelp content="Filter products by stock status: In Stock (above minimum), Low Stock (below threshold), or Out of Stock (zero quantity)." side="right">
+                  <Label htmlFor="stock-status">Stock Status</Label>
+                </TooltipHelp>
                 <Select>
                   <SelectTrigger data-testid="select-stock-status">
                     <SelectValue placeholder="All Stock Levels" />
@@ -118,7 +129,9 @@ export default function Inventory() {
         <Card>
           <CardContent className="p-0">
             <div className="px-6 py-4 border-b border-border">
-              <h3 className="text-lg font-medium text-foreground">Products & Stock Levels</h3>
+              <TooltipHelp content="This table shows all your products with current stock levels, pricing, and status. Click any product row to view detailed information and transaction history." side="right">
+                <h3 className="text-lg font-medium text-foreground">Products & Stock Levels</h3>
+              </TooltipHelp>
             </div>
             
             {!products || products.length === 0 ? (

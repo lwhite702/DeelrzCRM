@@ -6,6 +6,10 @@ import { storage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
 import { z } from "zod";
 import Stripe from "stripe";
+import multer from "multer";
+import { v4 as uuidv4 } from "uuid";
+import path from "path";
+import fs from "fs";
 import {
   insertTenantSchema,
   insertProductSchema,
@@ -1479,6 +1483,286 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       console.error("Error recording help feedback:", error);
       res.status(500).json({ message: "Failed to record help feedback" });
+    }
+  });
+
+  // Image Upload System for Knowledge Base Articles
+  
+  // Ensure upload directory exists
+  const uploadDir = path.join(process.cwd(), 'uploads', 'kb');
+  if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+  }
+
+  // Configure multer for image uploads
+  const multerStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+      const { tenantId, articleId } = req.params;
+      let uploadPath = uploadDir;
+      
+      if (tenantId) {
+        uploadPath = path.join(uploadDir, tenantId);
+      }
+      if (articleId) {
+        uploadPath = path.join(uploadPath, articleId);
+      }
+      
+      // Create directory if it doesn't exist
+      if (!fs.existsSync(uploadPath)) {
+        fs.mkdirSync(uploadPath, { recursive: true });
+      }
+      
+      cb(null, uploadPath);
+    },
+    filename: (req, file, cb) => {
+      // Generate unique filename with original extension
+      const ext = path.extname(file.originalname);
+      const uniqueName = `${uuidv4()}${ext}`;
+      cb(null, uniqueName);
+    }
+  });
+
+  // File filter for images only
+  const fileFilter = (req: any, file: any, cb: any) => {
+    const allowedMimes = [
+      'image/jpeg',
+      'image/jpg', 
+      'image/png',
+      'image/gif',
+      'image/webp'
+    ];
+    
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only image files are allowed.'), false);
+    }
+  };
+
+  const upload = multer({
+    storage: multerStorage,
+    fileFilter: fileFilter,
+    limits: {
+      fileSize: 5 * 1024 * 1024, // 5MB limit
+      files: 10 // Max 10 files per upload
+    }
+  });
+
+  // Serve uploaded images statically
+  app.use('/uploads/kb', express.static(path.join(process.cwd(), 'uploads', 'kb')));
+
+  // POST /api/help/uploads - Upload images for KB articles (Super Admin only)
+  app.post("/api/help/uploads", isAuthenticated, requireSuperAdmin, upload.array('images', 10), async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const files = req.files as Express.Multer.File[];
+      
+      if (!files || files.length === 0) {
+        return res.status(400).json({ message: "No files uploaded" });
+      }
+
+      const uploadedFiles = files.map(file => {
+        // Calculate relative URL from upload path
+        const relativePath = path.relative(path.join(process.cwd(), 'uploads', 'kb'), file.path);
+        const imageUrl = `/uploads/kb/${relativePath.replace(/\\/g, '/')}`;
+        
+        return {
+          filename: file.filename,
+          originalName: file.originalname,
+          url: imageUrl,
+          size: file.size,
+          mimetype: file.mimetype
+        };
+      });
+
+      res.json({
+        message: "Images uploaded successfully",
+        files: uploadedFiles
+      });
+    } catch (error: any) {
+      console.error("Error uploading images:", error);
+      
+      if (error.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ 
+          message: "File too large. Maximum size is 5MB per image." 
+        });
+      }
+      
+      if (error.code === 'LIMIT_FILE_COUNT') {
+        return res.status(400).json({ 
+          message: "Too many files. Maximum is 10 files per upload." 
+        });
+      }
+      
+      if (error.message.includes('Invalid file type')) {
+        return res.status(400).json({ 
+          message: "Invalid file type. Only image files (JPEG, PNG, GIF, WebP) are allowed." 
+        });
+      }
+      
+      res.status(500).json({ message: "Failed to upload images" });
+    }
+  });
+
+  // POST /api/help/uploads/:tenantId - Upload images for tenant-specific KB articles
+  app.post("/api/help/uploads/:tenantId", isAuthenticated, requireTenantAccess, upload.array('images', 10), async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId } = req.params;
+      const files = req.files as Express.Multer.File[];
+      
+      if (!files || files.length === 0) {
+        return res.status(400).json({ message: "No files uploaded" });
+      }
+
+      const uploadedFiles = files.map(file => {
+        const relativePath = path.relative(path.join(process.cwd(), 'uploads', 'kb'), file.path);
+        const imageUrl = `/uploads/kb/${relativePath.replace(/\\/g, '/')}`;
+        
+        return {
+          filename: file.filename,
+          originalName: file.originalname,
+          url: imageUrl,
+          size: file.size,
+          mimetype: file.mimetype
+        };
+      });
+
+      res.json({
+        message: "Images uploaded successfully",
+        files: uploadedFiles
+      });
+    } catch (error: any) {
+      console.error("Error uploading tenant images:", error);
+      
+      if (error.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ 
+          message: "File too large. Maximum size is 5MB per image." 
+        });
+      }
+      
+      if (error.code === 'LIMIT_FILE_COUNT') {
+        return res.status(400).json({ 
+          message: "Too many files. Maximum is 10 files per upload." 
+        });
+      }
+      
+      if (error.message.includes('Invalid file type')) {
+        return res.status(400).json({ 
+          message: "Invalid file type. Only image files (JPEG, PNG, GIF, WebP) are allowed." 
+        });
+      }
+      
+      res.status(500).json({ message: "Failed to upload images" });
+    }
+  });
+
+  // POST /api/help/uploads/:tenantId/:articleId - Upload images for specific article
+  app.post("/api/help/uploads/:tenantId/:articleId", isAuthenticated, requireTenantAccess, upload.array('images', 10), async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId, articleId } = req.params;
+      const files = req.files as Express.Multer.File[];
+      
+      if (!files || files.length === 0) {
+        return res.status(400).json({ message: "No files uploaded" });
+      }
+
+      // Verify article exists and user has access
+      const article = await storage.getKbArticleById(articleId);
+      if (!article) {
+        return res.status(404).json({ message: "Article not found" });
+      }
+
+      if (article.tenantId !== tenantId) {
+        return res.status(400).json({ message: "Article does not belong to specified tenant" });
+      }
+
+      const uploadedFiles = files.map(file => {
+        const relativePath = path.relative(path.join(process.cwd(), 'uploads', 'kb'), file.path);
+        const imageUrl = `/uploads/kb/${relativePath.replace(/\\/g, '/')}`;
+        
+        return {
+          filename: file.filename,
+          originalName: file.originalname,
+          url: imageUrl,
+          size: file.size,
+          mimetype: file.mimetype
+        };
+      });
+
+      res.json({
+        message: "Images uploaded successfully",
+        files: uploadedFiles
+      });
+    } catch (error: any) {
+      console.error("Error uploading article images:", error);
+      
+      if (error.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ 
+          message: "File too large. Maximum size is 5MB per image." 
+        });
+      }
+      
+      if (error.code === 'LIMIT_FILE_COUNT') {
+        return res.status(400).json({ 
+          message: "Too many files. Maximum is 10 files per upload." 
+        });
+      }
+      
+      if (error.message.includes('Invalid file type')) {
+        return res.status(400).json({ 
+          message: "Invalid file type. Only image files (JPEG, PNG, GIF, WebP) are allowed." 
+        });
+      }
+      
+      res.status(500).json({ message: "Failed to upload images" });
+    }
+  });
+
+  // DELETE /api/help/uploads/:path - Delete uploaded image (Super Admin only)
+  app.delete("/api/help/uploads/*", isAuthenticated, requireSuperAdmin, async (req: any, res) => {
+    try {
+      const imagePath = req.params[0]; // Get the wildcard path
+      const fullPath = path.join(process.cwd(), 'uploads', 'kb', imagePath);
+      
+      // Security check: ensure path is within uploads directory
+      const uploadsDir = path.join(process.cwd(), 'uploads', 'kb');
+      const resolvedPath = path.resolve(fullPath);
+      const resolvedUploadsDir = path.resolve(uploadsDir);
+      
+      if (!resolvedPath.startsWith(resolvedUploadsDir)) {
+        return res.status(400).json({ message: "Invalid file path" });
+      }
+      
+      // Check if file exists
+      if (!fs.existsSync(fullPath)) {
+        return res.status(404).json({ message: "Image not found" });
+      }
+      
+      // Delete the file
+      fs.unlinkSync(fullPath);
+      
+      res.json({ message: "Image deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting image:", error);
+      res.status(500).json({ message: "Failed to delete image" });
+    }
+  });
+
+  // Development route to seed knowledge base articles - SECURED
+  app.post("/api/dev/seed-kb", isAuthenticated, requireSuperAdmin, async (req: any, res) => {
+    // SECURITY: Only allow in development environment
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(404).json({ message: "Not found" });
+    }
+    
+    try {
+      await storage.seedKnowledgeBaseArticles();
+      res.json({ message: "Knowledge base articles seeded successfully" });
+    } catch (error) {
+      console.error("Error seeding KB articles:", error);
+      res.status(500).json({ message: "Failed to seed knowledge base articles", error: error.message });
     }
   });
 

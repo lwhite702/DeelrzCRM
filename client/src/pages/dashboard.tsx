@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { TooltipHelp } from "@/components/ui/tooltip-help";
 import { useTenant } from "@/contexts/tenant-context";
 import { useLocation } from "@/lib/router";
 
@@ -44,7 +45,9 @@ export default function Dashboard() {
   return (
     <div className="p-4 sm:p-6 lg:p-8" data-testid="page-dashboard">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
+        <TooltipHelp content="The dashboard provides a real-time overview of your pharmacy's key performance indicators and recent activity. Monitor revenue, orders, inventory alerts, and credit accounts from this central hub.">
+          <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
+        </TooltipHelp>
         <p className="mt-1 text-sm text-muted-foreground">Overview of your pharmacy operations</p>
       </div>
 
@@ -59,7 +62,9 @@ export default function Dashboard() {
                 </div>
               </div>
               <div className="ml-4">
-                <p className="text-sm font-medium text-muted-foreground">Today's Revenue</p>
+                <TooltipHelp content="Daily revenue shows your total sales for today. This includes all completed orders and payments received." side="top">
+                  <p className="text-sm font-medium text-muted-foreground">Today's Revenue</p>
+                </TooltipHelp>
                 <p className="text-2xl font-semibold text-foreground" data-testid="text-revenue-today">
                   ${kpis?.todayRevenue || "0"}
                 </p>
@@ -78,7 +83,9 @@ export default function Dashboard() {
                 </div>
               </div>
               <div className="ml-4">
-                <p className="text-sm font-medium text-muted-foreground">Orders Today</p>
+                <TooltipHelp content="Number of orders processed today, including both pickup and delivery orders." side="top">
+                  <p className="text-sm font-medium text-muted-foreground">Orders Today</p>
+                </TooltipHelp>
                 <p className="text-2xl font-semibold text-foreground" data-testid="text-orders-today">
                   {kpis?.ordersToday || 0}
                 </p>
@@ -97,7 +104,9 @@ export default function Dashboard() {
                 </div>
               </div>
               <div className="ml-4">
-                <p className="text-sm font-medium text-muted-foreground">Low Stock Items</p>
+                <TooltipHelp content="Products that have fallen below the minimum stock threshold. Click to view inventory details and restock recommendations." side="top">
+                  <p className="text-sm font-medium text-muted-foreground">Low Stock Items</p>
+                </TooltipHelp>
                 <p className="text-2xl font-semibold text-foreground" data-testid="text-low-stock">
                   {kpis?.lowStockItems || 0}
                 </p>
@@ -116,7 +125,9 @@ export default function Dashboard() {
                 </div>
               </div>
               <div className="ml-4">
-                <p className="text-sm font-medium text-muted-foreground">Overdue Credits</p>
+                <TooltipHelp content="Total amount owed by customers with overdue credit payments. Includes all accounts past their due date." side="top">
+                  <p className="text-sm font-medium text-muted-foreground">Overdue Credits</p>
+                </TooltipHelp>
                 <p className="text-2xl font-semibold text-foreground" data-testid="text-overdue-credits">
                   ${kpis?.overdueCredits || "0"}
                 </p>
@@ -162,7 +173,9 @@ export default function Dashboard() {
 
         <Card>
           <CardContent className="p-6">
-            <h3 className="text-lg font-medium text-foreground mb-4">Quick Actions</h3>
+            <TooltipHelp content="Quick action buttons provide fast access to common tasks. Click any button to navigate directly to that feature." side="top">
+              <h3 className="text-lg font-medium text-foreground mb-4">Quick Actions</h3>
+            </TooltipHelp>
             <div className="grid grid-cols-2 gap-4">
               <Button 
                 variant="outline" 

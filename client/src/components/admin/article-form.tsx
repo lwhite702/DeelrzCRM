@@ -487,6 +487,9 @@ export function ArticleForm({ article, onSuccess, onCancel, className }: Article
                           placeholder="Write your article content in Markdown format..."
                           height="500px"
                           error={form.formState.errors.contentMd?.message}
+                          enableImageUpload={true}
+                          tenantId={form.watch("tenantId") || undefined}
+                          articleId={article?.id}
                         />
                       </FormControl>
                       <FormMessage />

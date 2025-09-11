@@ -1284,6 +1284,879 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
+  // Seed sample knowledge base articles for demonstration
+  async seedKnowledgeBaseArticles(): Promise<void> {
+    // Check if articles already exist
+    const existingArticles = await db
+      .select({ id: kbArticles.id })
+      .from(kbArticles)
+      .where(eq(kbArticles.isActive, true))
+      .limit(1);
+
+    if (existingArticles.length > 0) {
+      return; // Already seeded
+    }
+
+    // Get first admin user for article authorship
+    const adminUsers = await db.select().from(users).limit(1);
+    if (!adminUsers.length) {
+      throw new Error("No admin user found to create articles");
+    }
+
+    const adminUserId = adminUsers[0].id;
+    const sampleArticles = [
+      {
+        title: "Getting Started with PharmaCare SaaS",
+        slug: "getting-started-guide",
+        contentMd: `# Getting Started with PharmaCare SaaS
+
+Welcome to PharmaCare SaaS, your comprehensive pharmacy management solution! This guide will walk you through the essential features and help you get started quickly.
+
+## Quick Setup
+
+1. **Complete Your Profile**: Make sure your pharmacy information is accurate in Settings
+2. **Add Your First Products**: Go to Inventory → Add Product to start building your catalog
+3. **Set Up Customers**: Use the Customer Management section to add regular customers
+4. **Configure Payment Methods**: Set up your preferred payment processing options
+
+## Key Features Overview
+
+### Dashboard
+Your central hub for monitoring daily operations, revenue tracking, and important alerts.
+
+### Inventory Management
+- Track medications and products
+- Set minimum stock thresholds
+- Manage batch information and expiration dates
+- Monitor stock levels in real-time
+
+### Customer Management
+- Store customer contact information
+- Track loyalty program participation
+- Manage credit accounts and payment preferences
+- View customer purchase history
+
+### Sales Point of Sale
+- Quick product search and selection
+- Built-in pricing calculators
+- Multiple payment method support
+- Automatic tax calculation
+
+## Getting Help
+
+- Use **Ctrl+?** or **F1** to open the quick help overlay
+- Look for the **?** icons next to features for contextual help
+- Visit the full Help section for comprehensive documentation
+- Contact support if you need additional assistance
+
+*Need more detailed guidance? Try the guided tour by clicking the tour button in the help section!*`,
+        category: "getting_started" as const,
+        tags: ["setup", "overview", "basics"],
+        isActive: true,
+        createdBy: adminUserId,
+        tenantId: null, // Global article
+      },
+      {
+        title: "Managing Your Inventory",
+        slug: "inventory-management-guide",
+        contentMd: `# Managing Your Inventory
+
+Effective inventory management is crucial for pharmacy operations. This guide covers all aspects of tracking medications and products in PharmaCare SaaS.
+
+## Adding Products
+
+1. Navigate to **Inventory Management**
+2. Click **Add Product**
+3. Fill in product details:
+   - Product name
+   - NDC code (if applicable)
+   - Product type (solid, liquid, other)
+   - Unit of measurement
+   - Description
+
+## Batch Tracking
+
+### Adding Batches
+- Click **Add Batch** to record new inventory receipts
+- Include supplier information
+- Record acquisition costs
+- Set expiration dates where applicable
+
+### Batch Benefits
+- Track product sources for safety recalls
+- Monitor costs and profit margins
+- Manage expiration date compliance
+- Maintain accurate inventory records
+
+## Stock Level Monitoring
+
+### Automatic Alerts
+- Set minimum stock thresholds for each product
+- Receive dashboard alerts when items run low
+- Track projected stockout dates
+- Monitor fast-moving vs. slow-moving inventory
+
+### Stock Status Indicators
+- **In Stock**: Above minimum threshold
+- **Low Stock**: Below threshold, needs reordering  
+- **Out of Stock**: Zero quantity available
+
+## Inventory Reports
+
+Access detailed reports for:
+- Current stock levels
+- Product movement history
+- Cost analysis
+- Expiration date tracking
+
+## Best Practices
+
+1. **Regular Audits**: Perform periodic physical counts
+2. **Accurate Records**: Keep batch information up to date
+3. **Proactive Reordering**: Monitor alerts and reorder before stockouts
+4. **Supplier Management**: Maintain good supplier relationships
+
+*Pro Tip: Use the search function to quickly find products by name or NDC code during busy periods.*`,
+        category: "features" as const,
+        tags: ["inventory", "products", "batches", "stock"],
+        isActive: true,
+        createdBy: adminUserId,
+        tenantId: null,
+      },
+      {
+        title: "Customer Management and Loyalty Programs",
+        slug: "customer-management",
+        contentMd: `# Customer Management and Loyalty Programs
+
+Building strong customer relationships is essential for pharmacy success. Learn how to effectively manage customer information and loyalty programs.
+
+## Adding New Customers
+
+1. Go to **Customer Management**
+2. Click **Add Customer** 
+3. Enter customer information:
+   - Full name
+   - Phone number
+   - Email address (optional)
+   - Delivery preferences
+   - Payment preferences
+   - Special notes
+
+## Customer Profiles
+
+### Contact Information
+- Store multiple contact methods
+- Track preferred communication channels
+- Update information as needed
+
+### Preferences Management
+- **Delivery Options**: Pickup vs. delivery preference
+- **Payment Methods**: Cash, card, or credit account
+- **Special Instructions**: Allergies, accessibility needs, etc.
+
+## Loyalty Program Features
+
+### Tier System
+- **Bronze**: Entry level (0-999 points)
+- **Silver**: Regular customers (1,000-4,999 points)  
+- **Gold**: Valued customers (5,000-9,999 points)
+- **Platinum**: VIP customers (10,000+ points)
+
+### Earning Points
+- 1 point per $1 spent
+- Bonus point promotions
+- Special event rewards
+- Referral bonuses
+
+### Redeeming Rewards
+- Points can be redeemed for discounts
+- Special member pricing on select items
+- Priority delivery service
+- Exclusive access to health programs
+
+## Credit Account Management
+
+### Setting Up Credit
+- Establish credit limits based on customer history
+- Set payment terms and due dates
+- Monitor credit utilization
+
+### Credit Monitoring
+- Track outstanding balances
+- Identify overdue accounts
+- Send payment reminders
+- Manage credit holds when necessary
+
+## Customer Service Best Practices
+
+1. **Personalized Service**: Use customer history to provide relevant recommendations
+2. **Privacy Protection**: Secure handling of medical and personal information
+3. **Communication**: Regular updates on prescriptions and health programs
+4. **Feedback Collection**: Use feedback to improve services
+
+*Remember: Happy customers become loyal customers who drive long-term business success.*`,
+        category: "features" as const,
+        tags: ["customers", "loyalty", "credit", "relationships"],
+        isActive: true,
+        createdBy: adminUserId,
+        tenantId: null,
+      },
+      {
+        title: "Sales Point of Sale System",
+        slug: "sales-pos-system",
+        contentMd: `# Sales Point of Sale System
+
+The Sales POS system streamlines transaction processing and order management. Learn to process sales efficiently and accurately.
+
+## Processing a Sale
+
+### Basic Transaction Flow
+1. **Search Products**: Use the search bar to find items quickly
+2. **Add to Cart**: Click on products to add them to the current order
+3. **Select Customer**: Choose an existing customer or process as walk-in
+4. **Choose Payment Method**: Cash, card, or credit account
+5. **Complete Transaction**: Process payment and print receipt
+
+## Product Selection Tools
+
+### Quick Search
+- Search by product name
+- Search by NDC code
+- Filter results in real-time
+- Visual product cards with pricing
+
+### Pricing Information
+- Current pricing displayed
+- Stock availability indicator
+- Automatic quantity pricing updates
+
+## Built-in Calculators
+
+### Quantity to Price Calculator
+- Enter desired quantity
+- Get exact total cost
+- Useful for bulk purchases
+- Helps with price quotes
+
+### Amount to Quantity Calculator  
+- Enter target dollar amount
+- Get suggested quantity that best fits budget
+- Shows exact change amount
+- Perfect for insurance copays
+
+## Payment Processing
+
+### Supported Payment Methods
+- **Cash**: Simple cash transactions
+- **Card**: Credit and debit card processing
+- **Credit**: Customer credit accounts
+- **Custom**: Other payment arrangements
+
+### Payment Features
+- Automatic tax calculation
+- Split payment support
+- Receipt generation
+- Transaction history tracking
+
+## Order Management
+
+### Order Status Tracking
+- Draft orders (in progress)
+- Confirmed orders (ready for fulfillment)
+- Paid orders (payment completed)
+- Voided orders (cancelled transactions)
+
+### Customer Information
+- Link orders to customer profiles
+- Track customer purchase history
+- Apply loyalty point earnings
+- Manage credit account charges
+
+## Tips for Efficient Operation
+
+1. **Keyboard Shortcuts**: Learn common shortcuts for faster processing
+2. **Product Favorites**: Keep frequently sold items easily accessible
+3. **Batch Processing**: Handle multiple prescriptions together when possible
+4. **Accurate Records**: Double-check quantities and pricing before completing sales
+
+## Troubleshooting Common Issues
+
+- **Payment Failures**: Check connection and retry
+- **Pricing Errors**: Verify product information and batch costs
+- **Inventory Mismatches**: Perform spot checks and adjust as needed
+
+*The POS system automatically updates inventory levels and customer records with each completed transaction.*`,
+        category: "features" as const,
+        tags: ["sales", "pos", "payments", "transactions"],
+        isActive: true,
+        createdBy: adminUserId,
+        tenantId: null,
+      },
+      {
+        title: "Common Technical Issues and Solutions",
+        slug: "troubleshooting-guide",
+        contentMd: `# Common Technical Issues and Solutions
+
+This guide helps you resolve common technical issues quickly and efficiently.
+
+## Login and Authentication Issues
+
+### Cannot Log In
+**Problem**: Unable to access your account
+
+**Solutions**:
+1. Verify your email address is correct
+2. Check if Caps Lock is enabled
+3. Try clearing your browser cache and cookies
+4. Use an incognito/private browsing window
+5. Contact support if issues persist
+
+### Session Expired Messages
+**Problem**: Getting logged out frequently
+
+**Solutions**:
+- Check your internet connection stability
+- Avoid leaving the system idle for extended periods
+- Refresh the page and log in again
+- Contact support for session length adjustments
+
+## Data Loading Problems
+
+### Slow Page Loading
+**Problem**: Pages take too long to load
+
+**Solutions**:
+1. Check your internet connection speed
+2. Clear browser cache and reload
+3. Close unnecessary browser tabs
+4. Try a different browser
+5. Restart your browser or device
+
+### Missing Data or Empty Tables
+**Problem**: Expected data not displaying
+
+**Solutions**:
+- Refresh the page (F5 or Ctrl+R)
+- Check filter settings - clear all filters
+- Verify you have data for the selected date range
+- Confirm you have proper permissions for the data
+- Contact support if data should exist but isn't visible
+
+## Inventory and Product Issues
+
+### Product Not Found in Search
+**Problem**: Cannot locate products during sales
+
+**Solutions**:
+- Check spelling of product name
+- Try searching by NDC code instead
+- Use partial name matches
+- Verify product is active in inventory
+- Check if product exists in your catalog
+
+### Stock Level Discrepancies  
+**Problem**: Displayed stock doesn't match physical count
+
+**Solutions**:
+1. Perform a manual inventory count
+2. Check for recent transactions that may not have updated
+3. Review adjustment history for the product
+4. Use the inventory adjustment feature to correct levels
+5. Contact support for persistent discrepancies
+
+## Payment Processing Issues
+
+### Payment Failures
+**Problem**: Card payments being declined or failing
+
+**Solutions**:
+- Verify card information is entered correctly
+- Check if card is expired
+- Confirm sufficient funds are available
+- Try processing as a different payment type
+- Contact payment processor support
+
+### Missing Transaction Records
+**Problem**: Completed sales not appearing in records
+
+**Solutions**:
+- Check the correct date range in reports
+- Verify transaction wasn't voided
+- Look in the appropriate tenant's records
+- Refresh the transactions page
+- Contact support with transaction details
+
+## Browser and System Issues
+
+### Browser Compatibility
+**Supported Browsers**:
+- Chrome (recommended)
+- Firefox
+- Safari
+- Edge
+
+**Solutions for browser issues**:
+- Update to the latest browser version
+- Enable JavaScript and cookies
+- Disable browser extensions temporarily
+- Clear browser data and restart
+
+### Mobile Device Issues
+**Problem**: Difficulty using system on mobile
+
+**Solutions**:
+- Use landscape orientation for better visibility
+- Zoom in on small text or buttons
+- Try the desktop version if mobile view is limited
+- Ensure stable internet connection
+
+## Getting Additional Help
+
+### Before Contacting Support
+1. Note the exact error message (screenshot if possible)
+2. Record what you were trying to do when the issue occurred
+3. Note your browser type and version
+4. Try the basic troubleshooting steps above
+
+### Contact Information
+- **Email**: support@pharmacare.com
+- **Response Time**: Within 24 hours for most issues
+- **Emergency Support**: Available for critical system issues
+
+### Information to Include
+- Your pharmacy name and location
+- Description of the problem
+- Steps you've already tried
+- Screenshots or error messages
+- Time when the issue occurred
+
+*Most issues can be resolved quickly with basic troubleshooting. Don't hesitate to contact support for persistent problems.*`,
+        category: "troubleshooting" as const,
+        tags: ["troubleshooting", "technical", "issues", "support"],
+        isActive: true,
+        createdBy: adminUserId,
+        tenantId: null,
+      },
+      {
+        title: "Billing and Payment Information",
+        slug: "billing-payment-info",
+        contentMd: `# Billing and Payment Information
+
+Understanding your PharmaCare SaaS billing, payment processing, and subscription management.
+
+## Subscription Plans
+
+### Core Plan - $20/month per user
+**Features included**:
+- Complete pharmacy management system
+- Unlimited products and customers
+- Basic reporting and analytics
+- Email support
+- Mobile app access
+- Data backup and security
+
+### Enterprise Plan - Custom Pricing
+**Additional features**:
+- Advanced reporting and insights
+- API access for integrations
+- Priority phone support
+- Custom training sessions
+- Dedicated account manager
+
+## Billing Cycle
+
+### Monthly Billing
+- Charged on the same day each month
+- Automatic billing to your payment method
+- Email receipt sent within 24 hours
+- Usage-based charges included
+
+### Annual Billing
+- 12 months paid in advance
+- 10% discount compared to monthly billing
+- Single annual invoice
+- Locked-in pricing for the year
+
+## Payment Methods
+
+### Accepted Payment Types
+- Credit cards (Visa, MasterCard, American Express)
+- Business bank accounts (ACH)
+- PayPal for some regions
+
+### Payment Processing
+- Secure encryption for all transactions
+- PCI-DSS compliant payment handling
+- Automatic retry for failed payments
+- Payment method updates through account settings
+
+## Transaction Processing Fees
+
+### Stripe Integration
+- **Standard Processing**: 2.9% + 30¢ per transaction
+- **International Cards**: Additional 1.5% fee
+- **Business Cards**: Additional 0.8% fee
+
+### Fee Structure
+- Processing fees are separate from subscription costs
+- Fees automatically calculated and included in payouts
+- Monthly fee summary available in reports
+- Volume discounts available for high-volume pharmacies
+
+## Invoicing and Receipts
+
+### Automatic Invoicing
+- Invoices generated monthly on billing date
+- Emailed to account administrator
+- Available for download in account settings
+- Includes subscription and usage charges
+
+### Receipt Management
+- All payment receipts stored in account history
+- Downloadable PDF format
+- Integration with accounting software
+- Tax information included where applicable
+
+## Account Changes
+
+### Adding Users
+- New users prorated for current billing period
+- Charges appear on next invoice
+- Immediate access after payment confirmation
+
+### Removing Users
+- Credits applied to next billing cycle
+- 30-day notice recommended
+- Data retention during transition period
+
+### Plan Changes
+- Upgrades effective immediately
+- Downgrades at next billing cycle
+- Prorated charges for partial periods
+
+## Payment Issues
+
+### Failed Payments
+**Common causes**:
+- Expired credit card
+- Insufficient funds
+- Billing address mismatch
+- Bank security holds
+
+**Resolution steps**:
+1. Update payment method in account settings
+2. Contact your bank if needed
+3. Manual payment processing available
+4. Account suspension after 10 days of failed payments
+
+### Dispute Resolution
+- Contact support within 30 days of charge
+- Provide detailed explanation of dispute
+- Documentation review process
+- Resolution typically within 5-7 business days
+
+## Tax Information
+
+### Sales Tax
+- Applied based on pharmacy location
+- Rates updated automatically
+- Itemized on all invoices
+- Tax exemption certificates accepted
+
+### International Customers
+- VAT applied for European customers
+- Currency conversion at time of payment
+- Local tax requirements may apply
+- Region-specific billing support available
+
+## Support and Account Management
+
+### Billing Support
+- **Email**: billing@pharmacare.com
+- **Phone**: Available during business hours
+- **Response Time**: Within 24 hours
+
+### Account Access
+- Primary account holder manages billing
+- Additional users can view invoices (with permission)
+- Account transfer process available
+- Data export before account closure
+
+*Keep your payment information updated to avoid service interruptions. Contact billing support for any payment-related questions.*`,
+        category: "billing" as const,
+        tags: ["billing", "payments", "subscription", "pricing"],
+        isActive: true,
+        createdBy: adminUserId,
+        tenantId: null,
+      },
+      {
+        title: "API Documentation and Integration Guide",
+        slug: "api-integration-guide",
+        contentMd: `# API Documentation and Integration Guide
+
+Learn how to integrate with PharmaCare SaaS APIs for custom workflows and external system connections.
+
+## Getting Started with APIs
+
+### API Access Requirements
+- Enterprise subscription plan required
+- API keys generated through admin settings
+- Rate limiting: 1000 requests per hour
+- RESTful JSON APIs with standard HTTP methods
+
+### Authentication
+All API requests require authentication using API keys:
+
+\`\`\`http
+Authorization: Bearer your-api-key-here
+Content-Type: application/json
+\`\`\`
+
+### Base URL
+\`\`\`
+https://api.pharmacare.com/v1
+\`\`\`
+
+## Core Endpoints
+
+### Inventory Management
+
+#### Get Products
+\`\`\`http
+GET /api/products
+\`\`\`
+
+**Parameters**:
+- \`search\` (optional): Product name or NDC filter
+- \`category\` (optional): Product category filter
+- \`limit\` (optional): Results per page (default: 50)
+- \`offset\` (optional): Pagination offset
+
+**Response**:
+\`\`\`json
+{
+  "products": [
+    {
+      "id": "prod_123",
+      "name": "Aspirin 325mg",
+      "ndc_code": "12345-678-90",
+      "current_stock": 150,
+      "unit_price": 12.99,
+      "category": "otc"
+    }
+  ],
+  "total": 1,
+  "has_more": false
+}
+\`\`\`
+
+#### Update Stock Levels
+\`\`\`http
+PUT /api/products/{product_id}/stock
+\`\`\`
+
+**Request Body**:
+\`\`\`json
+{
+  "quantity": 200,
+  "reason": "restock",
+  "notes": "Weekly inventory delivery"
+}
+\`\`\`
+
+### Customer Management
+
+#### Create Customer
+\`\`\`http
+POST /api/customers
+\`\`\`
+
+**Request Body**:
+\`\`\`json
+{
+  "name": "John Smith",
+  "email": "john@example.com", 
+  "phone": "(555) 123-4567",
+  "preferred_delivery": "pickup",
+  "loyalty_program": true
+}
+\`\`\`
+
+#### Get Customer Details
+\`\`\`http
+GET /api/customers/{customer_id}
+\`\`\`
+
+### Order Processing
+
+#### Create Order
+\`\`\`http
+POST /api/orders
+\`\`\`
+
+**Request Body**:
+\`\`\`json
+{
+  "customer_id": "cust_123",
+  "items": [
+    {
+      "product_id": "prod_456",
+      "quantity": 2,
+      "unit_price": 15.99
+    }
+  ],
+  "payment_method": "card",
+  "delivery_method": "pickup"
+}
+\`\`\`
+
+#### Get Order Status
+\`\`\`http
+GET /api/orders/{order_id}
+\`\`\`
+
+## Webhook Notifications
+
+### Setting Up Webhooks
+Configure webhook URLs in your account settings to receive real-time notifications:
+
+- **Order Events**: \`order.created\`, \`order.paid\`, \`order.completed\`
+- **Inventory Events**: \`product.low_stock\`, \`product.out_of_stock\`
+- **Customer Events**: \`customer.created\`, \`customer.updated\`
+
+### Webhook Payload Example
+\`\`\`json
+{
+  "event": "order.created",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "data": {
+    "order_id": "ord_789",
+    "customer_id": "cust_123",
+    "total_amount": 47.98,
+    "status": "pending"
+  }
+}
+\`\`\`
+
+## Integration Examples
+
+### Inventory Sync Script (Python)
+\`\`\`python
+import requests
+
+API_KEY = "your-api-key"
+BASE_URL = "https://api.pharmacare.com/v1"
+
+headers = {
+    "Authorization": f"Bearer {API_KEY}",
+    "Content-Type": "application/json"
+}
+
+# Get low stock items
+response = requests.get(
+    f"{BASE_URL}/api/products",
+    params={"stock_level": "low"},
+    headers=headers
+)
+
+low_stock_items = response.json()["products"]
+print(f"Found {len(low_stock_items)} low stock items")
+\`\`\`
+
+### Customer Loyalty Integration (JavaScript)
+\`\`\`javascript
+const updateLoyaltyPoints = async (customerId, points) => {
+  const response = await fetch(\`\${BASE_URL}/api/customers/\${customerId}/loyalty\`, {
+    method: 'PUT',
+    headers: {
+      'Authorization': \`Bearer \${API_KEY}\`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      points_earned: points,
+      transaction_type: 'purchase'
+    })
+  });
+  
+  return response.json();
+};
+\`\`\`
+
+## Error Handling
+
+### Common HTTP Status Codes
+- **200**: Success
+- **201**: Created successfully
+- **400**: Bad request (validation errors)
+- **401**: Unauthorized (invalid API key)
+- **403**: Forbidden (insufficient permissions)
+- **404**: Resource not found
+- **429**: Rate limit exceeded
+- **500**: Internal server error
+
+### Error Response Format
+\`\`\`json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Required field 'name' is missing",
+    "details": {
+      "field": "name",
+      "required": true
+    }
+  }
+}
+\`\`\`
+
+## Rate Limiting and Best Practices
+
+### Rate Limits
+- **Standard Plan**: 500 requests/hour
+- **Enterprise Plan**: 1000 requests/hour
+- **Burst allowance**: Up to 50 requests/minute
+
+### Best Practices
+1. **Cache responses** when possible to reduce API calls
+2. **Use pagination** for large datasets
+3. **Implement exponential backoff** for retries
+4. **Validate data locally** before sending to API
+5. **Monitor rate limits** using response headers
+
+### Response Headers
+\`\`\`http
+X-RateLimit-Limit: 1000
+X-RateLimit-Remaining: 999
+X-RateLimit-Reset: 1642284000
+\`\`\`
+
+## Support and Resources
+
+### API Support
+- **Documentation**: https://docs.pharmacare.com/api
+- **Support Email**: api-support@pharmacare.com
+- **Community Forum**: https://community.pharmacare.com
+- **Status Page**: https://status.pharmacare.com
+
+### SDKs and Libraries
+- **PHP SDK**: Available on GitHub
+- **Python SDK**: Available via PyPI
+- **Node.js SDK**: Available via NPM
+- **C# SDK**: Available via NuGet
+
+*API access requires an Enterprise subscription. Contact sales for pricing and setup assistance.*`,
+        category: "api" as const,
+        tags: ["api", "integration", "development", "technical"],
+        isActive: true,
+        createdBy: adminUserId,
+        tenantId: null,
+      }
+    ];
+
+    // Insert all articles
+    await db.insert(kbArticles).values(sampleArticles);
+    console.log(`Seeded ${sampleArticles.length} knowledge base articles`);
+  }
+
   // User Settings
   async getUserSettings(userId: string): Promise<UserSettings | undefined> {
     const [settings] = await db

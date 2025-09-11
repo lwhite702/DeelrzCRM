@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { TooltipHelp } from "@/components/ui/tooltip-help";
 import { useTenant } from "@/contexts/tenant-context";
 
 interface Customer {
@@ -64,13 +65,17 @@ export default function Customers() {
     <div className="p-4 sm:p-6 lg:p-8">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8">
           <div>
-            <h1 className="text-2xl font-bold text-foreground">Customer Management</h1>
+            <TooltipHelp content="Customer management allows you to store customer information, track loyalty programs, manage credit accounts, and maintain customer preferences for delivery and payment methods." articleSlug="customer-management">
+              <h1 className="text-2xl font-bold text-foreground">Customer Management</h1>
+            </TooltipHelp>
             <p className="mt-1 text-sm text-muted-foreground">Manage customer profiles and preferences</p>
           </div>
-          <Button className="mt-4 sm:mt-0" data-testid="button-add-customer">
-            <i className="fas fa-user-plus mr-2"></i>
-            Add Customer
-          </Button>
+          <TooltipHelp content="Add a new customer to your database. Include contact information, delivery preferences, and payment methods to personalize their experience." side="bottom">
+            <Button className="mt-4 sm:mt-0" data-testid="button-add-customer">
+              <i className="fas fa-user-plus mr-2"></i>
+              Add Customer
+            </Button>
+          </TooltipHelp>
         </div>
 
         {/* Search and Filters */}
@@ -78,16 +83,20 @@ export default function Customers() {
           <CardContent className="p-6">
             <div className="flex flex-col lg:flex-row space-y-4 lg:space-y-0 lg:space-x-4">
               <div className="flex-1">
-                <Input 
-                  placeholder="Search customers by name, phone, or email..."
-                  data-testid="input-customer-search"
-                />
+                <TooltipHelp content="Search customers by name, phone, or email. Use partial matches to quickly find customer records and their associated information." side="right">
+                  <Input 
+                    placeholder="Search customers by name, phone, or email..."
+                    data-testid="input-customer-search"
+                  />
+                </TooltipHelp>
               </div>
               <div className="w-full lg:w-48">
                 <Select>
-                  <SelectTrigger data-testid="select-customer-filter">
-                    <SelectValue placeholder="All Customers" />
-                  </SelectTrigger>
+                  <TooltipHelp content="Filter customers by type: Loyalty Members (enrolled in rewards program), Credit Customers (have credit accounts), or Delivery Customers (prefer delivery service)." side="bottom">
+                    <SelectTrigger data-testid="select-customer-filter">
+                      <SelectValue placeholder="All Customers" />
+                    </SelectTrigger>
+                  </TooltipHelp>
                   <SelectContent>
                     <SelectItem value="all">All Customers</SelectItem>
                     <SelectItem value="loyalty">Loyalty Members</SelectItem>
@@ -104,7 +113,9 @@ export default function Customers() {
         <Card>
           <CardContent className="p-0">
             <div className="px-6 py-4 border-b border-border">
-              <h3 className="text-lg font-medium text-foreground">Customer Profiles</h3>
+              <TooltipHelp content="Customer profiles show contact information, loyalty status, credit limits, and preferences. Click any customer to view detailed information and transaction history." side="right">
+                <h3 className="text-lg font-medium text-foreground">Customer Profiles</h3>
+              </TooltipHelp>
             </div>
             
             {!customers || customers.length === 0 ? (
