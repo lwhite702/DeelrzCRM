@@ -8,7 +8,11 @@ import {
   insertProductSchema,
   insertCustomerSchema,
   insertOrderSchema,
+  batches,
+  products,
 } from "@shared/schema";
+import { db } from "./db";
+import { eq, and, sql } from "drizzle-orm";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
@@ -125,8 +129,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/tenants/:tenantId/customers", isAuthenticated, async (req: any, res) => {
     try {
       const { tenantId } = req.params;
-      const customers = await storage.getCustomers(tenantId);
-      res.json(customers);
+      const withDetails = req.query.with_details === 'true';
+      
+      if (withDetails) {
+        const customers = await storage.getCustomersWithDetails(tenantId);
+        res.json(customers);
+      } else {
+        const customers = await storage.getCustomers(tenantId);
+        res.json(customers);
+      }
     } catch (error) {
       console.error("Error fetching customers:", error);
       res.status(500).json({ message: "Failed to fetch customers" });
@@ -199,13 +210,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Product not found" });
       }
 
-      // Simplified pricing calculation
-      const basePrice = 10.99; // Would come from WAC calculation
-      const total = basePrice * quantity;
+      // Get tenant settings for margin calculation
+      const tenantSettings = await storage.getTenantSettings(tenantId);
+      const targetMargin = parseFloat(tenantSettings?.targetMargin || "0.30");
+
+      // Calculate WAC from batches
+      const [wacResult] = await db
+        .select({
+          wac: sql<number>`COALESCE(SUM(${batches.totalCost}) / NULLIF(SUM(${batches.qtyAcquired}), 0), 8.50)`,
+        })
+        .from(batches)
+        .innerJoin(products, eq(batches.productId, products.id))
+        .where(and(eq(batches.productId, productId), eq(products.tenantId, tenantId)));
+
+      const baseWAC = wacResult?.wac || 8.50; // fallback if no batches
+      const unitPrice = baseWAC * (1 + targetMargin); // Add target margin
+      const total = unitPrice * quantity;
 
       res.json({
         quantity,
-        unitPrice: basePrice,
+        unitPrice: parseFloat(unitPrice.toFixed(2)),
         total: total.toFixed(2),
       });
     } catch (error) {
@@ -223,15 +247,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Product not found" });
       }
 
-      // Simplified calculation
-      const basePrice = 10.99;
-      const maxQuantity = Math.floor(targetAmount / basePrice);
-      const actualTotal = maxQuantity * basePrice;
+      // Get tenant settings for margin calculation
+      const tenantSettings = await storage.getTenantSettings(tenantId);
+      const targetMargin = parseFloat(tenantSettings?.targetMargin || "0.30");
+
+      // Calculate WAC from batches
+      const [wacResult] = await db
+        .select({
+          wac: sql<number>`COALESCE(SUM(${batches.totalCost}) / NULLIF(SUM(${batches.qtyAcquired}), 0), 8.50)`,
+        })
+        .from(batches)
+        .innerJoin(products, eq(batches.productId, products.id))
+        .where(and(eq(batches.productId, productId), eq(products.tenantId, tenantId)));
+
+      const baseWAC = wacResult?.wac || 8.50; // fallback if no batches
+      const unitPrice = baseWAC * (1 + targetMargin); // Add target margin
+      const maxQuantity = Math.floor(targetAmount / unitPrice);
+      const actualTotal = maxQuantity * unitPrice;
       const change = targetAmount - actualTotal;
 
       res.json({
         suggestedQuantity: maxQuantity,
-        unitPrice: basePrice,
+        unitPrice: parseFloat(unitPrice.toFixed(2)),
         actualTotal: actualTotal.toFixed(2),
         change: change.toFixed(2),
       });
@@ -311,6 +348,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching credit accounts:", error);
       res.status(500).json({ message: "Failed to fetch credit accounts" });
+    }
+  });
+
+  // Delivery routes
+  app.get("/api/tenants/:tenantId/deliveries", isAuthenticated, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const deliveries = await storage.getDeliveries(tenantId);
+      res.json(deliveries);
+    } catch (error) {
+      console.error("Error fetching deliveries:", error);
+      res.status(500).json({ message: "Failed to fetch deliveries" });
     }
   });
 

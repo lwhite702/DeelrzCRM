@@ -16,13 +16,23 @@ interface Customer {
   preferredPayment?: string;
   notes?: string;
   createdAt: string;
+  loyaltyTier?: string;
+  loyaltyPoints?: number;
+  creditLimit?: string;
+  creditBalance?: string;
+  creditStatus?: string;
 }
 
 export default function Customers() {
   const { currentTenant } = useTenant();
   
   const { data: customers, isLoading } = useQuery<Customer[]>({
-    queryKey: ["/api/tenants", currentTenant, "customers"],
+    queryKey: ["/api/tenants", currentTenant, "customers", "with_details"],
+    queryFn: async () => {
+      const response = await fetch(`/api/tenants/${currentTenant}/customers?with_details=true`);
+      if (!response.ok) throw new Error('Failed to fetch customers');
+      return response.json();
+    },
     enabled: !!currentTenant,
   });
 
@@ -153,12 +163,35 @@ export default function Customers() {
                       <div className="flex items-center space-x-4">
                         <div className="text-right">
                           <div className="flex space-x-2 mb-1">
-                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                              Bronze Member
-                            </span>
-                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                              No Credit
-                            </span>
+                            {customer.loyaltyTier && (
+                              <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                                customer.loyaltyTier === 'gold' 
+                                  ? 'bg-yellow-100 text-yellow-800'
+                                  : customer.loyaltyTier === 'silver'
+                                  ? 'bg-gray-100 text-gray-800'
+                                  : customer.loyaltyTier === 'platinum'
+                                  ? 'bg-purple-100 text-purple-800'
+                                  : 'bg-orange-100 text-orange-800'
+                              }`} data-testid={`badge-loyalty-${customer.id}`}>
+                                {customer.loyaltyTier.charAt(0).toUpperCase() + customer.loyaltyTier.slice(1)} Member
+                                {customer.loyaltyPoints && ` (${customer.loyaltyPoints} pts)`}
+                              </span>
+                            )}
+                            {customer.creditStatus ? (
+                              <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                                customer.creditStatus === 'active' 
+                                  ? 'bg-green-100 text-green-800'
+                                  : customer.creditStatus === 'suspended'
+                                  ? 'bg-red-100 text-red-800'
+                                  : 'bg-gray-100 text-gray-800'
+                              }`} data-testid={`badge-credit-${customer.id}`}>
+                                Credit: ${customer.creditBalance || '0'} / ${customer.creditLimit || '0'}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800" data-testid={`badge-no-credit-${customer.id}`}>
+                                No Credit
+                              </span>
+                            )}
                           </div>
                           <p className="text-xs text-muted-foreground">
                             Prefers: {customer.preferredFulfillment || "Pickup"} | {customer.preferredPayment || "Cash"}

@@ -32,6 +32,21 @@ interface Customer {
   email?: string;
 }
 
+interface Delivery {
+  id: string;
+  orderId: string;
+  method: string;
+  addressLine1: string;
+  city: string;
+  state: string;
+  fee: string;
+  status: string;
+  createdAt: Date | null;
+  orderTotal: string;
+  customerName: string;
+  customerPhone?: string;
+}
+
 export default function Delivery() {
   const { currentTenant } = useTenant();
   const { toast } = useToast();
@@ -51,6 +66,11 @@ export default function Delivery() {
 
   const { data: customers } = useQuery<Customer[]>({
     queryKey: ["/api/tenants", currentTenant, "customers"],
+    enabled: !!currentTenant,
+  });
+
+  const { data: deliveries, isLoading: deliveriesLoading } = useQuery<Delivery[]>({
+    queryKey: ["/api/tenants", currentTenant, "deliveries"],
     enabled: !!currentTenant,
   });
 
@@ -216,51 +236,63 @@ export default function Delivery() {
               <h3 className="text-lg font-medium text-foreground mb-4">Active Deliveries</h3>
               
               <div className="space-y-4">
-                {/* Mock delivery entries for demonstration */}
-                <div className="border border-border rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <div>
-                      <h4 className="text-sm font-medium text-foreground">Order #1234</h4>
-                      <p className="text-xs text-muted-foreground">John Smith - (555) 123-4567</p>
+                {deliveriesLoading ? (
+                  <div className="space-y-4">
+                    <Skeleton className="h-20 w-full" />
+                    <Skeleton className="h-20 w-full" />
+                  </div>
+                ) : deliveries && deliveries.length > 0 ? (
+                  deliveries.map((delivery) => (
+                    <div key={delivery.id} className="border border-border rounded-lg p-4" data-testid={`delivery-card-${delivery.id}`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <div>
+                          <h4 className="text-sm font-medium text-foreground" data-testid={`text-order-id-${delivery.orderId}`}>
+                            Order #{delivery.orderId}
+                          </h4>
+                          <p className="text-xs text-muted-foreground" data-testid={`text-customer-info-${delivery.id}`}>
+                            {delivery.customerName} {delivery.customerPhone && `- ${delivery.customerPhone}`}
+                          </p>
+                        </div>
+                        <span 
+                          className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                            delivery.status === 'delivered' ? 'bg-green-100 text-green-800' :
+                            delivery.status === 'picked_up' ? 'bg-blue-100 text-blue-800' :
+                            delivery.status === 'requested' ? 'bg-yellow-100 text-yellow-800' :
+                            'bg-gray-100 text-gray-800'
+                          }`}
+                          data-testid={`status-delivery-${delivery.id}`}
+                        >
+                          {delivery.status === 'delivered' ? 'Delivered' :
+                           delivery.status === 'picked_up' ? 'Picked Up' :
+                           delivery.status === 'requested' ? 'Requested' :
+                           delivery.status}
+                        </span>
+                      </div>
+                      <div className="text-xs text-muted-foreground mb-2" data-testid={`text-address-${delivery.id}`}>
+                        <i className="fas fa-map-marker-alt mr-1"></i>
+                        {delivery.addressLine1}, {delivery.city}, {delivery.state}
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground" data-testid={`text-method-${delivery.id}`}>
+                          {delivery.method === 'manual_courier' ? 'Courier Delivery' : 'Pickup'}
+                        </span>
+                        <span className="text-foreground font-semibold" data-testid={`text-fee-${delivery.id}`}>
+                          ${delivery.fee} fee
+                        </span>
+                      </div>
                     </div>
-                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                      In Transit
-                    </span>
+                  ))
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground" data-testid="text-no-deliveries">
+                    <i className="fas fa-truck text-2xl mb-2"></i>
+                    <p>No active deliveries</p>
                   </div>
-                  <div className="text-xs text-muted-foreground mb-2">
-                    <i className="fas fa-map-marker-alt mr-1"></i>
-                    456 Customer St, City, State
-                  </div>
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground">ETA: 15 minutes</span>
-                    <span className="text-foreground font-semibold">$8.50 fee</span>
-                  </div>
-                </div>
-
-                <div className="border border-border rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <div>
-                      <h4 className="text-sm font-medium text-foreground">Order #1235</h4>
-                      <p className="text-xs text-muted-foreground">Sarah Johnson - (555) 987-6543</p>
-                    </div>
-                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                      Preparing
-                    </span>
-                  </div>
-                  <div className="text-xs text-muted-foreground mb-2">
-                    <i className="fas fa-map-marker-alt mr-1"></i>
-                    789 Main Ave, City, State
-                  </div>
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-muted-foreground">Scheduled for pickup</span>
-                    <span className="text-foreground font-semibold">$5.00 fee</span>
-                  </div>
-                </div>
+                )}
 
                 <div className="text-center py-4">
                   <Button variant="outline" size="sm" data-testid="button-view-all-deliveries">
                     <i className="fas fa-truck mr-2"></i>
-                    View All Deliveries
+                    View All Deliveries ({deliveries ? deliveries.length : 0})
                   </Button>
                 </div>
               </div>

@@ -13,6 +13,7 @@ import {
   loyaltyAccounts,
   credits,
   settingsTenant,
+  deliveries,
   type User,
   type UpsertUser,
   type Tenant,
@@ -64,6 +65,13 @@ export interface IStorage {
   
   // Customers
   getCustomers(tenantId: string): Promise<Customer[]>;
+  getCustomersWithDetails(tenantId: string): Promise<Array<Customer & { 
+    loyaltyTier?: string; 
+    loyaltyPoints?: number;
+    creditLimit?: string; 
+    creditBalance?: string;
+    creditStatus?: string;
+  }>>;
   createCustomer(customer: InsertCustomer): Promise<Customer>;
   getCustomer(id: string, tenantId: string): Promise<Customer | undefined>;
   
@@ -88,6 +96,22 @@ export interface IStorage {
   
   // Credit
   getCreditAccounts(tenantId: string): Promise<(Credit & { customerName: string })[]>;
+  
+  // Deliveries
+  getDeliveries(tenantId: string): Promise<Array<{
+    id: string;
+    orderId: string;
+    method: string;
+    addressLine1: string;
+    city: string;
+    state: string;
+    fee: string;
+    status: string;
+    createdAt: Date | null;
+    orderTotal: string;
+    customerName: string;
+    customerPhone?: string;
+  }>>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -270,6 +294,59 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(customers).where(eq(customers.tenantId, tenantId));
   }
 
+  async getCustomersWithDetails(tenantId: string): Promise<Array<Customer & { 
+    loyaltyTier?: string; 
+    loyaltyPoints?: number;
+    creditLimit?: string; 
+    creditBalance?: string;
+    creditStatus?: string;
+  }>> {
+    // Get all customers for the tenant
+    const customerList = await this.getCustomers(tenantId);
+
+    // Get loyalty data for all customers in one query
+    const loyaltyData = await db
+      .select({
+        customerId: loyaltyAccounts.customerId,
+        tier: loyaltyAccounts.tier,
+        points: loyaltyAccounts.points,
+      })
+      .from(loyaltyAccounts)
+      .where(eq(loyaltyAccounts.tenantId, tenantId));
+
+    // Get credit data for all customers in one query
+    const creditData = await db
+      .select({
+        customerId: credits.customerId,
+        limitAmount: credits.limitAmount,
+        balance: credits.balance,
+        status: credits.status,
+      })
+      .from(credits)
+      .where(eq(credits.tenantId, tenantId));
+
+    // Create lookup maps for efficient access
+    const loyaltyMap = new Map(loyaltyData.map(l => [l.customerId, l]));
+    const creditMap = new Map(creditData.map(c => [c.customerId, c]));
+
+    // Combine data for each customer
+    const customersWithDetails = customerList.map(customer => {
+      const loyalty = loyaltyMap.get(customer.id);
+      const credit = creditMap.get(customer.id);
+
+      return {
+        ...customer,
+        loyaltyTier: loyalty?.tier,
+        loyaltyPoints: loyalty?.points,
+        creditLimit: credit?.limitAmount,
+        creditBalance: credit?.balance,
+        creditStatus: credit?.status,
+      };
+    });
+
+    return customersWithDetails;
+  }
+
   async createCustomer(customer: InsertCustomer): Promise<Customer> {
     const [newCustomer] = await db.insert(customers).values(customer).returning();
     return newCustomer;
@@ -422,6 +499,51 @@ export class DatabaseStorage implements IStorage {
       .where(eq(credits.tenantId, tenantId));
     
     return results as (Credit & { customerName: string })[];
+  }
+
+  // Deliveries
+  async getDeliveries(tenantId: string): Promise<Array<{
+    id: string;
+    orderId: string;
+    method: string;
+    addressLine1: string;
+    city: string;
+    state: string;
+    fee: string;
+    status: string;
+    createdAt: Date | null;
+    orderTotal: string;
+    customerName: string;
+    customerPhone?: string;
+  }>> {
+    const results = await db
+      .select({
+        id: deliveries.id,
+        orderId: deliveries.orderId,
+        method: deliveries.method,
+        addressLine1: deliveries.addressLine1,
+        city: deliveries.city,
+        state: deliveries.state,
+        fee: deliveries.fee,
+        status: deliveries.status,
+        createdAt: deliveries.createdAt,
+        orderTotal: orders.total,
+        customerName: customers.name,
+        customerPhone: customers.phone,
+      })
+      .from(deliveries)
+      .innerJoin(orders, eq(deliveries.orderId, orders.id))
+      .leftJoin(customers, eq(orders.customerId, customers.id))
+      .where(eq(deliveries.tenantId, tenantId))
+      .orderBy(desc(deliveries.createdAt));
+
+    return results.map(r => ({
+      ...r,
+      customerName: r.customerName || 'Walk-in Customer',
+      addressLine1: r.addressLine1 || '',
+      city: r.city || '',
+      state: r.state || '',
+    }));
   }
 }
 

@@ -121,24 +121,59 @@ export default function SalesPOS() {
   const deliveryFee = 0; // No delivery fee for POS
   const total = subtotal + tax + deliveryFee;
 
-  const addToCart = (product: Product) => {
+  const addToCart = async (product: Product) => {
     const existingItem = cart.find(item => item.productId === product.id);
     
     if (existingItem) {
-      setCart(cart.map(item =>
-        item.productId === product.id
-          ? { ...item, quantity: item.quantity + 1, total: (item.quantity + 1) * item.unitPrice }
-          : item
-      ));
+      // For existing items, calculate new quantity and get updated pricing
+      const newQuantity = existingItem.quantity + 1;
+      try {
+        const priceCalc = await qtyToPriceMutation.mutateAsync({
+          productId: product.id,
+          quantity: newQuantity,
+          tenantId: currentTenant!,
+        });
+        
+        setCart(cart.map(item =>
+          item.productId === product.id
+            ? { 
+                ...item, 
+                quantity: newQuantity, 
+                unitPrice: priceCalc.unitPrice,
+                total: parseFloat(priceCalc.total)
+              }
+            : item
+        ));
+      } catch (error) {
+        toast({
+          title: "Pricing Error",
+          description: "Unable to calculate pricing for this item",
+          variant: "destructive",
+        });
+      }
     } else {
-      const unitPrice = 10.99; // Simplified pricing
-      setCart([...cart, {
-        productId: product.id,
-        name: product.name,
-        quantity: 1,
-        unitPrice,
-        total: unitPrice,
-      }]);
+      // For new items, get pricing for quantity 1
+      try {
+        const priceCalc = await qtyToPriceMutation.mutateAsync({
+          productId: product.id,
+          quantity: 1,
+          tenantId: currentTenant!,
+        });
+        
+        setCart([...cart, {
+          productId: product.id,
+          name: product.name,
+          quantity: 1,
+          unitPrice: priceCalc.unitPrice,
+          total: parseFloat(priceCalc.total),
+        }]);
+      } catch (error) {
+        toast({
+          title: "Pricing Error",
+          description: "Unable to calculate pricing for this item",
+          variant: "destructive",
+        });
+      }
     }
   };
 
