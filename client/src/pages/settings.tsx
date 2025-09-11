@@ -55,12 +55,12 @@ export default function Settings() {
   const { data: tenantSettings, isLoading } = useQuery<TenantSettings>({
     queryKey: ["/api/tenants", currentTenant, "settings"],
     enabled: !!currentTenant,
-    onSuccess: (data) => {
-      if (data) {
-        setSettings(data);
-      }
-    },
   });
+
+  // Update settings when data is fetched
+  if (tenantSettings && settings === defaultSettings) {
+    setSettings(tenantSettings);
+  }
 
   const updateSettingsMutation = useMutation({
     mutationFn: async (updatedSettings: Partial<TenantSettings>) => {

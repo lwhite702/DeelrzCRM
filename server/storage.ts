@@ -112,7 +112,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUserTenants(userId: string): Promise<(UserTenant & { tenant: Tenant })[]> {
-    return await db
+    const results = await db
       .select({
         userId: usersTenants.userId,
         tenantId: usersTenants.tenantId,
@@ -121,8 +121,10 @@ export class DatabaseStorage implements IStorage {
         tenant: tenants,
       })
       .from(usersTenants)
-      .leftJoin(tenants, eq(usersTenants.tenantId, tenants.id))
+      .innerJoin(tenants, eq(usersTenants.tenantId, tenants.id))
       .where(eq(usersTenants.userId, userId));
+    
+    return results as (UserTenant & { tenant: Tenant })[];
   }
 
   async addUserToTenant(data: InsertUserTenant): Promise<UserTenant> {

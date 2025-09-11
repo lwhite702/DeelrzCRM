@@ -71,7 +71,7 @@ export default function Header({ onMobileMenuToggle, tenantName }: HeaderProps) 
                 data-testid="button-user-menu"
               >
                 <span data-testid="text-user-initials">
-                  {getInitials(user?.firstName, user?.lastName)}
+                  {getInitials(user?.firstName || undefined, user?.lastName || undefined)}
                 </span>
               </Button>
             </div>

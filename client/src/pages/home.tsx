@@ -2,7 +2,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useTenant } from "@/hooks/use-tenant";
 import TenantSelector from "./tenant-selector";
 import MainLayout from "@/components/layout/main-layout";
-import Dashboard from "./dashboard";
+import Dashboard from "@/pages/dashboard";
 
 export default function Home() {
   const { user } = useAuth();

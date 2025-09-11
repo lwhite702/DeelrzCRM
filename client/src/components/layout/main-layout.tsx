@@ -13,11 +13,11 @@ export default function MainLayout({ children }: MainLayoutProps) {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const { currentTenant } = useTenant();
   
-  const { data: tenants } = useQuery({
+  const { data: tenants } = useQuery<Array<{ tenant: { id: string; name: string } }>>({
     queryKey: ["/api/tenants"],
   });
   
-  const currentTenantData = tenants?.find((t: any) => t.tenant.id === currentTenant);
+  const currentTenantData = tenants?.find(t => t.tenant.id === currentTenant);
   const tenantName = currentTenantData?.tenant.name;
 
   return (
