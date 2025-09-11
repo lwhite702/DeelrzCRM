@@ -16,6 +16,15 @@ interface Customer {
   email?: string;
 }
 
+interface LoyaltyAccount {
+  id: string;
+  customerId: string;
+  customerName: string;
+  points: number;
+  tier: string;
+  updatedAt: string;
+}
+
 interface LoyaltyTier {
   name: string;
   minPoints: number;
@@ -50,42 +59,18 @@ const loyaltyTiers: LoyaltyTier[] = [
   },
 ];
 
-// Mock loyalty data for demonstration
-const mockLoyaltyAccounts = [
-  {
-    id: "1",
-    customerId: "cust1",
-    customerName: "John Smith",
-    points: 1250,
-    tier: "Silver",
-    joinDate: "2024-01-15",
-    lastActivity: "2024-03-10",
-  },
-  {
-    id: "2",
-    customerId: "cust2",
-    customerName: "Sarah Johnson",
-    points: 2800,
-    tier: "Gold",
-    joinDate: "2023-08-20",
-    lastActivity: "2024-03-12",
-  },
-  {
-    id: "3",
-    customerId: "cust3",
-    customerName: "Mike Wilson",
-    points: 350,
-    tier: "Bronze",
-    joinDate: "2024-02-01",
-    lastActivity: "2024-03-08",
-  },
-];
+// Remove mock data - now using real database queries
 
 export default function Loyalty() {
   const { currentTenant } = useTenant();
 
   const { data: customers, isLoading } = useQuery<Customer[]>({
     queryKey: ["/api/tenants", currentTenant, "customers"],
+    enabled: !!currentTenant,
+  });
+
+  const { data: loyaltyAccounts, isLoading: loyaltyLoading } = useQuery<LoyaltyAccount[]>({
+    queryKey: ["/api/tenants", currentTenant, "loyalty"],
     enabled: !!currentTenant,
   });
 
@@ -109,7 +94,7 @@ export default function Loyalty() {
     return Math.min(progress, 100);
   };
 
-  if (isLoading) {
+  if (isLoading || loyaltyLoading) {
     return (
       <MainLayout>
         <div className="p-4 sm:p-6 lg:p-8">
@@ -174,13 +159,13 @@ export default function Loyalty() {
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm text-muted-foreground">Total Members</span>
                     <span className="text-lg font-semibold text-foreground" data-testid="text-total-members">
-                      {mockLoyaltyAccounts.length}
+                      {loyaltyAccounts?.length || 0}
                     </span>
                   </div>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm text-muted-foreground">Active This Month</span>
                     <span className="text-lg font-semibold text-foreground" data-testid="text-active-members">
-                      {mockLoyaltyAccounts.length}
+                      {loyaltyAccounts?.length || 0}
                     </span>
                   </div>
                 </div>
@@ -189,10 +174,10 @@ export default function Loyalty() {
                   <h4 className="text-sm font-medium text-foreground mb-3">Tier Distribution</h4>
                   <div className="space-y-2">
                     {loyaltyTiers.map((tier) => {
-                      const count = mockLoyaltyAccounts.filter(
-                        account => getTierForPoints(account.points).name === tier.name
-                      ).length;
-                      const percentage = (count / mockLoyaltyAccounts.length) * 100;
+                      const count = loyaltyAccounts?.filter(
+                        (account: LoyaltyAccount) => getTierForPoints(account.points).name === tier.name
+                      ).length || 0;
+                      const percentage = loyaltyAccounts?.length ? (count / loyaltyAccounts.length) * 100 : 0;
                       
                       return (
                         <div key={tier.name} className="flex items-center justify-between text-sm">
@@ -242,7 +227,8 @@ export default function Loyalty() {
             </div>
 
             <div className="space-y-4">
-              {mockLoyaltyAccounts.map((account) => {
+              {loyaltyAccounts && loyaltyAccounts.length > 0 ? (
+                loyaltyAccounts.map((account: LoyaltyAccount) => {
                 const currentTier = getTierForPoints(account.points);
                 const nextTier = getNextTier(account.points);
                 const progress = getProgressToNextTier(account.points);
@@ -267,7 +253,7 @@ export default function Loyalty() {
                               {currentTier.name}
                             </Badge>
                             <span className="text-sm text-muted-foreground">
-                              Member since {new Date(account.joinDate).toLocaleDateString()}
+                              Last updated {new Date(account.updatedAt).toLocaleDateString()}
                             </span>
                           </div>
                         </div>
@@ -297,7 +283,7 @@ export default function Loyalty() {
                     
                     <div className="flex items-center justify-between mt-4">
                       <span className="text-xs text-muted-foreground">
-                        Last activity: {new Date(account.lastActivity).toLocaleDateString()}
+                        Last updated: {new Date(account.updatedAt).toLocaleDateString()}
                       </span>
                       <div className="flex items-center space-x-2">
                         <Button variant="outline" size="sm" data-testid={`button-adjust-points-${account.id}`}>
@@ -312,7 +298,13 @@ export default function Loyalty() {
                     </div>
                   </div>
                 );
-              })}
+              })
+              ) : (
+                <div className="text-center py-8 text-muted-foreground" data-testid="text-no-loyalty-members">
+                  <i className="fas fa-star text-2xl mb-2"></i>
+                  <p>No loyalty members yet</p>
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -332,11 +324,11 @@ export default function Loyalty() {
                   data-testid="select-customer-points"
                 >
                   <option value="">Select customer</option>
-                  {mockLoyaltyAccounts.map((account) => (
+                  {loyaltyAccounts?.map((account: LoyaltyAccount) => (
                     <option key={account.id} value={account.id}>
                       {account.customerName}
                     </option>
-                  ))}
+                  )) || []}
                 </select>
               </div>
               

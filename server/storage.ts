@@ -112,6 +112,9 @@ export interface IStorage {
     customerName: string;
     customerPhone?: string;
   }>>;
+  
+  // Development/Test Seeding
+  seedLoyaltyForTenant(tenantId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -543,7 +546,89 @@ export class DatabaseStorage implements IStorage {
       addressLine1: r.addressLine1 || '',
       city: r.city || '',
       state: r.state || '',
+      customerPhone: r.customerPhone || undefined,
     }));
+  }
+
+  // Development/Test Seeding Functions
+  async seedLoyaltyForTenant(tenantId: string): Promise<void> {
+    // Only run in development/test environments
+    if (process.env.NODE_ENV === 'production') {
+      return;
+    }
+
+    // Check if loyalty accounts already exist for this tenant
+    const existingAccounts = await db
+      .select({ id: loyaltyAccounts.id })
+      .from(loyaltyAccounts)
+      .where(eq(loyaltyAccounts.tenantId, tenantId))
+      .limit(1);
+
+    if (existingAccounts.length > 0) {
+      return; // Already seeded
+    }
+
+    // Create sample customers first
+    const sampleCustomers = [
+      {
+        id: `cust-${tenantId}-1`,
+        tenantId,
+        name: 'John Smith',
+        phone: '(555) 123-4567',
+        email: 'john.smith@example.com',
+        address: '123 Oak Street, Springfield, IL',
+      },
+      {
+        id: `cust-${tenantId}-2`,
+        tenantId,
+        name: 'Sarah Johnson',
+        phone: '(555) 234-5678',
+        email: 'sarah.johnson@example.com',
+        address: '456 Pine Avenue, Springfield, IL',
+      },
+      {
+        id: `cust-${tenantId}-3`,
+        tenantId,
+        name: 'Mike Wilson',
+        phone: '(555) 345-6789',
+        email: 'mike.wilson@example.com',
+        address: '789 Elm Drive, Springfield, IL',
+      },
+    ];
+
+    // Insert customers
+    await db.insert(customers).values(sampleCustomers).onConflictDoNothing();
+
+    // Create corresponding loyalty accounts
+    const sampleLoyaltyAccounts = [
+      {
+        id: `loyal-${tenantId}-1`,
+        tenantId,
+        customerId: `cust-${tenantId}-1`,
+        points: 1250,
+        tier: 'silver' as const,
+        updatedAt: new Date(),
+      },
+      {
+        id: `loyal-${tenantId}-2`,
+        tenantId,
+        customerId: `cust-${tenantId}-2`,
+        points: 2800,
+        tier: 'gold' as const,
+        updatedAt: new Date(),
+      },
+      {
+        id: `loyal-${tenantId}-3`,
+        tenantId,
+        customerId: `cust-${tenantId}-3`,
+        points: 350,
+        tier: 'bronze' as const,
+        updatedAt: new Date(),
+      },
+    ];
+
+    // Insert loyalty accounts
+    await db.insert(loyaltyAccounts).values(sampleLoyaltyAccounts).onConflictDoNothing();
   }
 }
 

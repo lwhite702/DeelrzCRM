@@ -331,7 +331,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/tenants/:tenantId/loyalty", isAuthenticated, async (req: any, res) => {
     try {
       const { tenantId } = req.params;
-      const loyaltyAccounts = await storage.getLoyaltyAccounts(tenantId);
+      let loyaltyAccounts = await storage.getLoyaltyAccounts(tenantId);
+      
+      // Lazy backfill for dev/test environments - seed if empty
+      if (loyaltyAccounts.length === 0 && process.env.NODE_ENV !== 'production') {
+        await storage.seedLoyaltyForTenant(tenantId);
+        loyaltyAccounts = await storage.getLoyaltyAccounts(tenantId);
+      }
+      
       res.json(loyaltyAccounts);
     } catch (error) {
       console.error("Error fetching loyalty accounts:", error);
