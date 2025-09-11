@@ -1,0 +1,265 @@
+import type { Express } from "express";
+import { createServer, type Server } from "http";
+import { storage } from "./storage";
+import { setupAuth, isAuthenticated } from "./replitAuth";
+import { z } from "zod";
+import {
+  insertTenantSchema,
+  insertProductSchema,
+  insertCustomerSchema,
+  insertOrderSchema,
+} from "@shared/schema";
+
+export async function registerRoutes(app: Express): Promise<Server> {
+  // Auth middleware
+  await setupAuth(app);
+
+  // Auth routes
+  app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const user = await storage.getUser(userId);
+      res.json(user);
+    } catch (error) {
+      console.error("Error fetching user:", error);
+      res.status(500).json({ message: "Failed to fetch user" });
+    }
+  });
+
+  // Tenant routes
+  app.get("/api/tenants", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const userTenants = await storage.getUserTenants(userId);
+      res.json(userTenants);
+    } catch (error) {
+      console.error("Error fetching tenants:", error);
+      res.status(500).json({ message: "Failed to fetch tenants" });
+    }
+  });
+
+  app.post("/api/tenants", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const user = await storage.getUser(userId);
+      
+      // Check if user is super admin
+      if (!user) {
+        return res.status(401).json({ message: "User not found" });
+      }
+
+      const tenantData = insertTenantSchema.parse(req.body);
+      const tenant = await storage.createTenant(tenantData);
+      
+      // Add creating user as owner
+      await storage.addUserToTenant({
+        userId: userId,
+        tenantId: tenant.id,
+        role: "owner",
+      });
+
+      res.json(tenant);
+    } catch (error) {
+      console.error("Error creating tenant:", error);
+      res.status(500).json({ message: "Failed to create tenant" });
+    }
+  });
+
+  // Feature flag routes
+  app.get("/api/feature-flags", isAuthenticated, async (req: any, res) => {
+    try {
+      const flags = await storage.getFeatureFlags();
+      res.json(flags);
+    } catch (error) {
+      console.error("Error fetching feature flags:", error);
+      res.status(500).json({ message: "Failed to fetch feature flags" });
+    }
+  });
+
+  app.get("/api/tenants/:tenantId/feature-flags", isAuthenticated, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const flags = await storage.getTenantFeatureFlags(tenantId);
+      res.json(flags);
+    } catch (error) {
+      console.error("Error fetching tenant feature flags:", error);
+      res.status(500).json({ message: "Failed to fetch tenant feature flags" });
+    }
+  });
+
+  // Product routes (Inventory module)
+  app.get("/api/tenants/:tenantId/products", isAuthenticated, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const products = await storage.getProducts(tenantId);
+      res.json(products);
+    } catch (error) {
+      console.error("Error fetching products:", error);
+      res.status(500).json({ message: "Failed to fetch products" });
+    }
+  });
+
+  app.post("/api/tenants/:tenantId/products", isAuthenticated, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const productData = insertProductSchema.parse({
+        ...req.body,
+        tenantId,
+      });
+      const product = await storage.createProduct(productData);
+      res.json(product);
+    } catch (error) {
+      console.error("Error creating product:", error);
+      res.status(500).json({ message: "Failed to create product" });
+    }
+  });
+
+  // Customer routes
+  app.get("/api/tenants/:tenantId/customers", isAuthenticated, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const customers = await storage.getCustomers(tenantId);
+      res.json(customers);
+    } catch (error) {
+      console.error("Error fetching customers:", error);
+      res.status(500).json({ message: "Failed to fetch customers" });
+    }
+  });
+
+  app.post("/api/tenants/:tenantId/customers", isAuthenticated, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const customerData = insertCustomerSchema.parse({
+        ...req.body,
+        tenantId,
+      });
+      const customer = await storage.createCustomer(customerData);
+      res.json(customer);
+    } catch (error) {
+      console.error("Error creating customer:", error);
+      res.status(500).json({ message: "Failed to create customer" });
+    }
+  });
+
+  // Order routes (Sales module)
+  app.get("/api/tenants/:tenantId/orders", isAuthenticated, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const orders = await storage.getOrders(tenantId);
+      res.json(orders);
+    } catch (error) {
+      console.error("Error fetching orders:", error);
+      res.status(500).json({ message: "Failed to fetch orders" });
+    }
+  });
+
+  app.post("/api/tenants/:tenantId/orders", isAuthenticated, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const userId = req.user.claims.sub;
+      const orderData = insertOrderSchema.parse({
+        ...req.body,
+        tenantId,
+        createdBy: userId,
+      });
+      const order = await storage.createOrder(orderData);
+      res.json(order);
+    } catch (error) {
+      console.error("Error creating order:", error);
+      res.status(500).json({ message: "Failed to create order" });
+    }
+  });
+
+  // Dashboard KPIs
+  app.get("/api/tenants/:tenantId/dashboard/kpis", isAuthenticated, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const kpis = await storage.getDashboardKPIs(tenantId);
+      res.json(kpis);
+    } catch (error) {
+      console.error("Error fetching dashboard KPIs:", error);
+      res.status(500).json({ message: "Failed to fetch dashboard KPIs" });
+    }
+  });
+
+  // Sales POS calculators
+  app.post("/api/orders/assist/qty-to-price", isAuthenticated, async (req: any, res) => {
+    try {
+      const { productId, quantity, tenantId } = req.body;
+      
+      const product = await storage.getProduct(productId, tenantId);
+      if (!product) {
+        return res.status(404).json({ message: "Product not found" });
+      }
+
+      // Simplified pricing calculation
+      const basePrice = 10.99; // Would come from WAC calculation
+      const total = basePrice * quantity;
+
+      res.json({
+        quantity,
+        unitPrice: basePrice,
+        total: total.toFixed(2),
+      });
+    } catch (error) {
+      console.error("Error calculating qty to price:", error);
+      res.status(500).json({ message: "Failed to calculate price" });
+    }
+  });
+
+  app.post("/api/orders/assist/amount-to-qty", isAuthenticated, async (req: any, res) => {
+    try {
+      const { productId, targetAmount, tenantId } = req.body;
+      
+      const product = await storage.getProduct(productId, tenantId);
+      if (!product) {
+        return res.status(404).json({ message: "Product not found" });
+      }
+
+      // Simplified calculation
+      const basePrice = 10.99;
+      const maxQuantity = Math.floor(targetAmount / basePrice);
+      const actualTotal = maxQuantity * basePrice;
+      const change = targetAmount - actualTotal;
+
+      res.json({
+        suggestedQuantity: maxQuantity,
+        unitPrice: basePrice,
+        actualTotal: actualTotal.toFixed(2),
+        change: change.toFixed(2),
+      });
+    } catch (error) {
+      console.error("Error calculating amount to qty:", error);
+      res.status(500).json({ message: "Failed to calculate quantity" });
+    }
+  });
+
+  // Delivery fee estimation
+  app.post("/api/delivery/estimate", isAuthenticated, async (req: any, res) => {
+    try {
+      const { tenantId, pickupLat, pickupLon, dropoffLat, dropoffLon } = req.body;
+      
+      // Simplified distance calculation (would use proper geocoding service)
+      const distance = Math.sqrt(
+        Math.pow(dropoffLat - pickupLat, 2) + Math.pow(dropoffLon - pickupLon, 2)
+      ) * 69; // rough miles conversion
+      
+      const baseFee = 5.00;
+      const perMileFee = 1.50;
+      const estimatedFee = baseFee + (distance * perMileFee);
+      const estimatedTime = Math.max(15, distance * 3); // 3 minutes per mile, min 15
+
+      res.json({
+        distance: distance.toFixed(2),
+        fee: estimatedFee.toFixed(2),
+        estimatedMinutes: Math.round(estimatedTime),
+      });
+    } catch (error) {
+      console.error("Error estimating delivery fee:", error);
+      res.status(500).json({ message: "Failed to estimate delivery fee" });
+    }
+  });
+
+  const httpServer = createServer(app);
+  return httpServer;
+}
