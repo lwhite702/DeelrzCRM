@@ -15,6 +15,8 @@ import {
   insertCreditTransactionSchema,
   insertPaymentSchema,
   insertTenantSettingsSchema,
+  insertKbArticleSchema,
+  insertKbFeedbackSchema,
   batches,
   products,
   webhookEvents,
@@ -60,6 +62,28 @@ const requireTenantAccess = async (req: any, res: any, next: any) => {
     next();
   } catch (error) {
     console.error("Tenant authorization error:", error);
+    res.status(500).json({ message: "Authorization check failed" });
+  }
+};
+
+// Super admin authorization middleware
+const requireSuperAdmin = async (req: any, res: any, next: any) => {
+  try {
+    const userId = req.user.claims.sub;
+    
+    // Get user and check their role across all tenants
+    const userTenants = await storage.getUserTenants(userId);
+    const isSuperAdmin = userTenants.some(ut => ut.role === "super_admin");
+    
+    if (!isSuperAdmin) {
+      return res.status(403).json({ 
+        message: "Access denied: Super admin role required" 
+      });
+    }
+    
+    next();
+  } catch (error) {
+    console.error("Super admin authorization error:", error);
     res.status(500).json({ message: "Authorization check failed" });
   }
 };
@@ -1156,6 +1180,270 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching deliveries:", error);
       res.status(500).json({ message: "Failed to fetch deliveries" });
+    }
+  });
+
+  // Help System Routes
+  
+  // GET /api/help/articles - List and search knowledge base articles
+  app.get("/api/help/articles", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { search, category, tenant_only } = req.query;
+      
+      // Get user's tenants to determine article access
+      const userTenants = await storage.getUserTenants(userId);
+      const tenantIds = userTenants.map(ut => ut.tenantId);
+      
+      // Build filters
+      const filters: any = {};
+      
+      if (search) {
+        filters.search = search as string;
+      }
+      
+      if (category) {
+        filters.category = category as string;
+      }
+      
+      if (tenant_only === 'true') {
+        // Only return tenant-specific articles for user's tenants
+        // We'll filter in the storage method since we have multiple tenants
+        const allArticles = [];
+        for (const tenantId of tenantIds) {
+          const tenantArticles = await storage.getKbArticles({ 
+            ...filters, 
+            tenantId, 
+            includeGlobal: false 
+          });
+          allArticles.push(...tenantArticles);
+        }
+        res.json(allArticles);
+      } else {
+        // Return global articles plus all tenant-specific articles user has access to
+        const globalArticles = await storage.getKbArticles({ 
+          ...filters, 
+          tenantId: null, 
+          includeGlobal: false 
+        });
+        
+        const tenantArticles = [];
+        for (const tenantId of tenantIds) {
+          const articles = await storage.getKbArticles({ 
+            ...filters, 
+            tenantId, 
+            includeGlobal: false 
+          });
+          tenantArticles.push(...articles);
+        }
+        
+        // Combine and deduplicate
+        const allArticles = [...globalArticles, ...tenantArticles];
+        const uniqueArticles = allArticles.filter((article, index, self) => 
+          index === self.findIndex(a => a.id === article.id)
+        );
+        
+        res.json(uniqueArticles);
+      }
+    } catch (error) {
+      console.error("Error fetching help articles:", error);
+      res.status(500).json({ message: "Failed to fetch help articles" });
+    }
+  });
+
+  // GET /api/help/articles/:slug - Get single article by slug
+  app.get("/api/help/articles/:slug", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { slug } = req.params;
+      
+      const article = await storage.getKbArticleBySlug(slug);
+      
+      if (!article) {
+        return res.status(404).json({ message: "Article not found" });
+      }
+      
+      // Check access: global articles or tenant-specific articles user has access to
+      if (article.tenantId) {
+        const userTenants = await storage.getUserTenants(userId);
+        const hasAccess = userTenants.some(ut => ut.tenantId === article.tenantId);
+        
+        if (!hasAccess) {
+          return res.status(403).json({ 
+            message: "Access denied: You don't have permission to view this article" 
+          });
+        }
+      }
+      
+      res.json(article);
+    } catch (error) {
+      console.error("Error fetching help article:", error);
+      res.status(500).json({ message: "Failed to fetch help article" });
+    }
+  });
+
+  // POST /api/help/articles - Create new knowledge base article (Super Admin only)
+  app.post("/api/help/articles", isAuthenticated, requireSuperAdmin, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      
+      const articleData = insertKbArticleSchema.parse({
+        ...req.body,
+        createdBy: userId,
+      });
+      
+      // Check if slug is unique
+      const existingArticle = await storage.getKbArticleBySlug(articleData.slug);
+      if (existingArticle) {
+        return res.status(409).json({ 
+          message: "Article with this slug already exists" 
+        });
+      }
+      
+      const article = await storage.createKbArticle(articleData);
+      res.status(201).json(article);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Invalid article data", 
+          errors: error.errors 
+        });
+      }
+      console.error("Error creating help article:", error);
+      res.status(500).json({ message: "Failed to create help article" });
+    }
+  });
+
+  // PUT /api/help/articles/:id - Update existing article (Super Admin only)
+  app.put("/api/help/articles/:id", isAuthenticated, requireSuperAdmin, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      
+      // Check if article exists
+      const existingArticle = await storage.getKbArticleById(id);
+      if (!existingArticle) {
+        return res.status(404).json({ message: "Article not found" });
+      }
+      
+      // Parse update data (excluding fields that shouldn't be updated)
+      const updateData = insertKbArticleSchema.partial().parse(req.body);
+      
+      // If slug is being updated, check uniqueness
+      if (updateData.slug && updateData.slug !== existingArticle.slug) {
+        const conflictingArticle = await storage.getKbArticleBySlug(updateData.slug);
+        if (conflictingArticle && conflictingArticle.id !== id) {
+          return res.status(409).json({ 
+            message: "Article with this slug already exists" 
+          });
+        }
+      }
+      
+      const updatedArticle = await storage.updateKbArticle(id, updateData);
+      res.json(updatedArticle);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Invalid article data", 
+          errors: error.errors 
+        });
+      }
+      console.error("Error updating help article:", error);
+      res.status(500).json({ message: "Failed to update help article" });
+    }
+  });
+
+  // DELETE /api/help/articles/:id - Soft delete article (Super Admin only)
+  app.delete("/api/help/articles/:id", isAuthenticated, requireSuperAdmin, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      
+      // Check if article exists
+      const existingArticle = await storage.getKbArticleById(id);
+      if (!existingArticle) {
+        return res.status(404).json({ message: "Article not found" });
+      }
+      
+      if (!existingArticle.isActive) {
+        return res.status(410).json({ message: "Article already deleted" });
+      }
+      
+      const deletedArticle = await storage.softDeleteKbArticle(id);
+      res.json({ 
+        message: "Article deleted successfully", 
+        article: deletedArticle 
+      });
+    } catch (error) {
+      console.error("Error deleting help article:", error);
+      res.status(500).json({ message: "Failed to delete help article" });
+    }
+  });
+
+  // POST /api/help/feedback - Record article feedback
+  app.post("/api/help/feedback", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { articleId, isHelpful } = req.body;
+      
+      // Validate required fields
+      if (!articleId || typeof isHelpful !== 'boolean') {
+        return res.status(400).json({ 
+          message: "articleId and isHelpful (boolean) are required" 
+        });
+      }
+      
+      // Check if article exists and user has access
+      const article = await storage.getKbArticleById(articleId);
+      if (!article) {
+        return res.status(404).json({ message: "Article not found" });
+      }
+      
+      if (!article.isActive) {
+        return res.status(410).json({ message: "Cannot provide feedback on deleted article" });
+      }
+      
+      // Check access for tenant-specific articles
+      if (article.tenantId) {
+        const userTenants = await storage.getUserTenants(userId);
+        const hasAccess = userTenants.some(ut => ut.tenantId === article.tenantId);
+        
+        if (!hasAccess) {
+          return res.status(403).json({ 
+            message: "Access denied: You don't have permission to provide feedback on this article" 
+          });
+        }
+      }
+      
+      // Get user's first tenant for the feedback record (required by schema)
+      const userTenants = await storage.getUserTenants(userId);
+      const tenantId = userTenants[0]?.tenantId;
+      
+      if (!tenantId) {
+        return res.status(400).json({ 
+          message: "User must be associated with at least one tenant to provide feedback" 
+        });
+      }
+      
+      const feedbackData = insertKbFeedbackSchema.parse({
+        articleId,
+        userId,
+        tenantId,
+        isHelpful,
+      });
+      
+      const feedback = await storage.upsertKbFeedback(feedbackData);
+      res.status(201).json({ 
+        message: "Feedback recorded successfully", 
+        feedback 
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Invalid feedback data", 
+          errors: error.errors 
+        });
+      }
+      console.error("Error recording help feedback:", error);
+      res.status(500).json({ message: "Failed to record help feedback" });
     }
   });
 

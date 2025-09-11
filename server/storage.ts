@@ -16,6 +16,8 @@ import {
   settingsTenant,
   deliveries,
   payments,
+  kbArticles,
+  kbFeedback,
   type User,
   type UpsertUser,
   type Tenant,
@@ -39,9 +41,13 @@ import {
   type Payment,
   type InsertPayment,
   type TenantSettings,
+  type KbArticle,
+  type InsertKbArticle,
+  type KbFeedback,
+  type InsertKbFeedback,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql, or, like, ilike, isNull } from "drizzle-orm";
 
 export interface IStorage {
   // User operations (required for Replit Auth)
@@ -150,6 +156,18 @@ export interface IStorage {
     customerName: string;
     customerPhone?: string;
   }>>;
+  
+  // Knowledge Base Articles
+  getKbArticles(filters?: { search?: string; category?: string; tenantId?: string | null; includeGlobal?: boolean }): Promise<KbArticle[]>;
+  getKbArticleBySlug(slug: string): Promise<KbArticle | undefined>;
+  getKbArticleById(id: string): Promise<KbArticle | undefined>;
+  createKbArticle(article: InsertKbArticle): Promise<KbArticle>;
+  updateKbArticle(id: string, article: Partial<InsertKbArticle>): Promise<KbArticle>;
+  softDeleteKbArticle(id: string): Promise<KbArticle>;
+  
+  // Knowledge Base Feedback
+  getKbFeedback(articleId: string, userId: string): Promise<KbFeedback | undefined>;
+  upsertKbFeedback(feedback: InsertKbFeedback): Promise<KbFeedback>;
   
   // Development/Test Seeding
   seedLoyaltyForTenant(tenantId: string): Promise<void>;
@@ -1134,6 +1152,129 @@ export class DatabaseStorage implements IStorage {
 
     // Insert loyalty accounts
     await db.insert(loyaltyAccounts).values(sampleLoyaltyAccounts).onConflictDoNothing();
+  }
+
+  // Knowledge Base Articles
+  async getKbArticles(filters?: { 
+    search?: string; 
+    category?: string; 
+    tenantId?: string | null; 
+    includeGlobal?: boolean 
+  }): Promise<KbArticle[]> {
+    let query = db.select().from(kbArticles).where(eq(kbArticles.isActive, true));
+    
+    // Apply filters
+    const conditions = [eq(kbArticles.isActive, true)];
+    
+    // Search filter
+    if (filters?.search) {
+      const searchCondition = or(
+        ilike(kbArticles.title, `%${filters.search}%`),
+        ilike(kbArticles.contentMd, `%${filters.search}%`)
+      );
+      if (searchCondition) {
+        conditions.push(searchCondition);
+      }
+    }
+    
+    // Category filter
+    if (filters?.category) {
+      conditions.push(eq(kbArticles.category, filters.category as any));
+    }
+    
+    // Tenant filtering
+    if (filters?.tenantId !== undefined) {
+      if (filters.includeGlobal) {
+        // Include both tenant-specific and global articles
+        if (filters.tenantId === null) {
+          conditions.push(isNull(kbArticles.tenantId));
+        } else {
+          const orCondition = or(
+            eq(kbArticles.tenantId, filters.tenantId),
+            isNull(kbArticles.tenantId)
+          );
+          if (orCondition) {
+            conditions.push(orCondition);
+          }
+        }
+      } else {
+        // Only tenant-specific or only global
+        if (filters.tenantId === null) {
+          conditions.push(isNull(kbArticles.tenantId));
+        } else {
+          conditions.push(eq(kbArticles.tenantId, filters.tenantId));
+        }
+      }
+    }
+    
+    return await db
+      .select()
+      .from(kbArticles)
+      .where(and(...conditions))
+      .orderBy(desc(kbArticles.createdAt));
+  }
+
+  async getKbArticleBySlug(slug: string): Promise<KbArticle | undefined> {
+    const [article] = await db
+      .select()
+      .from(kbArticles)
+      .where(and(eq(kbArticles.slug, slug), eq(kbArticles.isActive, true)));
+    return article;
+  }
+
+  async getKbArticleById(id: string): Promise<KbArticle | undefined> {
+    const [article] = await db
+      .select()
+      .from(kbArticles)
+      .where(eq(kbArticles.id, id));
+    return article;
+  }
+
+  async createKbArticle(article: InsertKbArticle): Promise<KbArticle> {
+    const [newArticle] = await db.insert(kbArticles).values(article).returning();
+    return newArticle;
+  }
+
+  async updateKbArticle(id: string, article: Partial<InsertKbArticle>): Promise<KbArticle> {
+    const [updatedArticle] = await db
+      .update(kbArticles)
+      .set({ ...article, updatedAt: new Date() })
+      .where(eq(kbArticles.id, id))
+      .returning();
+    return updatedArticle;
+  }
+
+  async softDeleteKbArticle(id: string): Promise<KbArticle> {
+    const [deletedArticle] = await db
+      .update(kbArticles)
+      .set({ isActive: false, updatedAt: new Date() })
+      .where(eq(kbArticles.id, id))
+      .returning();
+    return deletedArticle;
+  }
+
+  // Knowledge Base Feedback
+  async getKbFeedback(articleId: string, userId: string): Promise<KbFeedback | undefined> {
+    const [feedback] = await db
+      .select()
+      .from(kbFeedback)
+      .where(and(eq(kbFeedback.articleId, articleId), eq(kbFeedback.userId, userId)));
+    return feedback;
+  }
+
+  async upsertKbFeedback(feedback: InsertKbFeedback): Promise<KbFeedback> {
+    const [result] = await db
+      .insert(kbFeedback)
+      .values(feedback)
+      .onConflictDoUpdate({
+        target: [kbFeedback.articleId, kbFeedback.userId],
+        set: {
+          isHelpful: feedback.isHelpful,
+          createdAt: new Date(),
+        },
+      })
+      .returning();
+    return result;
   }
 }
 
