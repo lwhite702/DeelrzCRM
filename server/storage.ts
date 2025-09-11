@@ -76,6 +76,12 @@ export interface IStorage {
   
   // Settings
   getTenantSettings(tenantId: string): Promise<TenantSettings | undefined>;
+  
+  // Loyalty
+  getLoyaltyAccounts(tenantId: string): Promise<(LoyaltyAccount & { customerName: string })[]>;
+  
+  // Credit
+  getCreditAccounts(tenantId: string): Promise<(Credit & { customerName: string })[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -305,6 +311,45 @@ export class DatabaseStorage implements IStorage {
       .from(settingsTenant)
       .where(eq(settingsTenant.tenantId, tenantId));
     return settings;
+  }
+
+  // Loyalty
+  async getLoyaltyAccounts(tenantId: string): Promise<(LoyaltyAccount & { customerName: string })[]> {
+    const results = await db
+      .select({
+        id: loyaltyAccounts.id,
+        tenantId: loyaltyAccounts.tenantId,
+        customerId: loyaltyAccounts.customerId,
+        points: loyaltyAccounts.points,
+        tier: loyaltyAccounts.tier,
+        updatedAt: loyaltyAccounts.updatedAt,
+        customerName: customers.name,
+      })
+      .from(loyaltyAccounts)
+      .innerJoin(customers, eq(loyaltyAccounts.customerId, customers.id))
+      .where(eq(loyaltyAccounts.tenantId, tenantId));
+    
+    return results as (LoyaltyAccount & { customerName: string })[];
+  }
+
+  // Credit
+  async getCreditAccounts(tenantId: string): Promise<(Credit & { customerName: string })[]> {
+    const results = await db
+      .select({
+        id: credits.id,
+        tenantId: credits.tenantId,
+        customerId: credits.customerId,
+        limitAmount: credits.limitAmount,
+        balance: credits.balance,
+        status: credits.status,
+        updatedAt: credits.updatedAt,
+        customerName: customers.name,
+      })
+      .from(credits)
+      .innerJoin(customers, eq(credits.customerId, customers.id))
+      .where(eq(credits.tenantId, tenantId));
+    
+    return results as (Credit & { customerName: string })[];
   }
 }
 

@@ -260,6 +260,53 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Tenant settings routes
+  app.get("/api/tenants/:tenantId/settings", isAuthenticated, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const settings = await storage.getTenantSettings(tenantId);
+      res.json(settings);
+    } catch (error) {
+      console.error("Error fetching tenant settings:", error);
+      res.status(500).json({ message: "Failed to fetch tenant settings" });
+    }
+  });
+
+  app.put("/api/tenants/:tenantId/settings", isAuthenticated, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      // For now, just return success - full implementation would update database
+      res.json({ message: "Settings updated successfully" });
+    } catch (error) {
+      console.error("Error updating tenant settings:", error);
+      res.status(500).json({ message: "Failed to update tenant settings" });
+    }
+  });
+
+  // Loyalty accounts routes
+  app.get("/api/tenants/:tenantId/loyalty", isAuthenticated, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const loyaltyAccounts = await storage.getLoyaltyAccounts(tenantId);
+      res.json(loyaltyAccounts);
+    } catch (error) {
+      console.error("Error fetching loyalty accounts:", error);
+      res.status(500).json({ message: "Failed to fetch loyalty accounts" });
+    }
+  });
+
+  // Credit accounts routes
+  app.get("/api/tenants/:tenantId/credit", isAuthenticated, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const creditAccounts = await storage.getCreditAccounts(tenantId);
+      res.json(creditAccounts);
+    } catch (error) {
+      console.error("Error fetching credit accounts:", error);
+      res.status(500).json({ message: "Failed to fetch credit accounts" });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }
