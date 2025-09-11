@@ -53,6 +53,7 @@ export const loyaltyTierEnum = pgEnum("loyalty_tier", ["bronze", "silver", "gold
 export const creditStatusEnum = pgEnum("credit_status", ["active", "suspended", "frozen"]);
 export const creditTransactionStatusEnum = pgEnum("credit_transaction_status", ["pending", "paid", "overdue"]);
 export const paymentModeEnum = pgEnum("payment_mode", ["platform", "connect_standard", "connect_express"]);
+export const paymentMethodEnum = pgEnum("payment_method", ["card", "cash", "custom", "transfer", "ach"]);
 
 // Tenants
 export const tenants = pgTable("tenants", {
@@ -308,11 +309,43 @@ export const settingsTenant = pgTable("settings_tenant", {
   stripeAccountId: varchar("stripe_account_id"),
 });
 
+// Payments
+export const payments = pgTable("payments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  orderId: varchar("order_id").references(() => orders.id, { onDelete: "set null" }),
+  customerId: varchar("customer_id").references(() => customers.id, { onDelete: "set null" }),
+  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(),
+  currency: varchar("currency", { length: 3 }).notNull().default("usd"),
+  status: paymentStatusEnum("status").notNull().default("pending"),
+  method: paymentMethodEnum("method").notNull(),
+  paymentIntentId: varchar("payment_intent_id"),
+  chargeId: varchar("charge_id"),
+  transferId: varchar("transfer_id"),
+  refundId: varchar("refund_id"),
+  failureReason: varchar("failure_reason"),
+  notes: text("notes"),
+  metadata: jsonb("metadata"),
+  applicationFeeBps: integer("application_fee_bps").default(0),
+  processingFeeCents: integer("processing_fee_cents").default(0),
+  createdBy: varchar("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("idx_payments_tenant").on(table.tenantId),
+  index("idx_payments_order").on(table.orderId),
+  index("idx_payments_customer").on(table.customerId),
+  index("idx_payments_status").on(table.status),
+  index("idx_payments_created").on(table.createdAt),
+  index("idx_payments_intent").on(table.paymentIntentId),
+]);
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   usersTenants: many(usersTenants),
   ordersCreated: many(orders),
   adjustmentsCreated: many(adjustments),
+  paymentsCreated: many(payments),
 }));
 
 export const tenantsRelations = relations(tenants, ({ many, one }) => ({
@@ -320,6 +353,7 @@ export const tenantsRelations = relations(tenants, ({ many, one }) => ({
   products: many(products),
   customers: many(customers),
   orders: many(orders),
+  payments: many(payments),
   settings: one(settingsTenant),
   featureFlagOverrides: many(featureFlagOverrides),
 }));
@@ -352,6 +386,7 @@ export const customersRelations = relations(customers, ({ one, many }) => ({
     references: [tenants.id],
   }),
   orders: many(orders),
+  payments: many(payments),
   loyaltyAccount: one(loyaltyAccounts),
   credit: one(credits),
   loyaltyEvents: many(loyaltyEvents),
@@ -372,7 +407,27 @@ export const ordersRelations = relations(orders, ({ one, many }) => ({
     references: [users.id],
   }),
   orderItems: many(orderItems),
+  payments: many(payments),
   delivery: one(deliveries),
+}));
+
+export const paymentsRelations = relations(payments, ({ one }) => ({
+  tenant: one(tenants, {
+    fields: [payments.tenantId],
+    references: [tenants.id],
+  }),
+  order: one(orders, {
+    fields: [payments.orderId],
+    references: [orders.id],
+  }),
+  customer: one(customers, {
+    fields: [payments.customerId],
+    references: [customers.id],
+  }),
+  createdBy: one(users, {
+    fields: [payments.createdBy],
+    references: [users.id],
+  }),
 }));
 
 // Type exports
@@ -402,6 +457,8 @@ export type Credit = typeof credits.$inferSelect;
 export type InsertCredit = typeof credits.$inferInsert;
 export type CreditTransaction = typeof creditTransactions.$inferSelect;
 export type InsertCreditTransaction = typeof creditTransactions.$inferInsert;
+export type Payment = typeof payments.$inferSelect;
+export type InsertPayment = typeof payments.$inferInsert;
 export type TenantSettings = typeof settingsTenant.$inferSelect;
 export type InsertTenantSettings = typeof settingsTenant.$inferInsert;
 
@@ -441,4 +498,10 @@ export const insertCreditSchema = createInsertSchema(credits).omit({
 export const insertCreditTransactionSchema = createInsertSchema(creditTransactions).omit({
   id: true,
   createdAt: true,
+});
+
+export const insertPaymentSchema = createInsertSchema(payments).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
 });

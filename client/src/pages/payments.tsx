@@ -1,63 +1,91 @@
+import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useTenant } from "@/hooks/use-tenant";
+import { useToast } from "@/hooks/use-toast";
 import MainLayout from "@/components/layout/main-layout";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { PaymentForm } from "@/components/payment-form";
+import { STRIPE_ENABLED } from "@/lib/stripe";
+import type { Payment, TenantSettings } from "@shared/schema";
 
-// Mock payment data for demonstration
-const mockPayments = [
-  {
-    id: "pi_1234567890",
-    amount: "125.50",
-    currency: "usd",
-    status: "succeeded",
-    paymentMethod: "card",
-    customerName: "John Smith",
-    createdAt: "2024-03-12T10:30:00Z",
-    chargeId: "ch_1234567890",
-  },
-  {
-    id: "pi_0987654321",
-    amount: "89.75",
-    currency: "usd",
-    status: "pending",
-    paymentMethod: "cash",
-    customerName: "Sarah Johnson",
-    createdAt: "2024-03-12T09:15:00Z",
-    paymentNotes: "Exact change provided",
-  },
-  {
-    id: "pi_5678901234",
-    amount: "67.25",
-    currency: "usd",
-    status: "failed",
-    paymentMethod: "card",
-    customerName: "Mike Wilson",
-    createdAt: "2024-03-11T16:45:00Z",
-    failureReason: "insufficient_funds",
-  },
-];
+// Type definitions for API responses
+interface PaymentStatistics {
+  todayProcessed: string;
+  todayPending: string;
+  todayFailed: number;
+  totalVolume: string;
+}
 
-const mockPaymentSettings = {
-  paymentMode: "platform",
-  stripeAccountId: null,
-  applicationFeeBps: 250, // 2.5%
-  defaultCurrency: "usd",
-};
+interface PaymentWithCustomer extends Payment {
+  customerName?: string;
+}
+
 
 export default function Payments() {
   const { currentTenant } = useTenant();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
+
+  // Fetch payments data
+  const { data: payments = [], isLoading: paymentsLoading, error: paymentsError } = useQuery<PaymentWithCustomer[]>({
+    queryKey: ['/api/tenants', currentTenant, 'payments'],
+    enabled: !!currentTenant,
+  });
+
+  // Fetch payment statistics
+  const { data: statistics, isLoading: statisticsLoading } = useQuery<PaymentStatistics>({
+    queryKey: ['/api/tenants', currentTenant, 'payments', 'statistics'],
+    enabled: !!currentTenant,
+  });
+
+  // Fetch payment settings
+  const { data: paymentSettings, isLoading: settingsLoading } = useQuery<TenantSettings>({
+    queryKey: ['/api/tenants', currentTenant, 'payments', 'settings'],
+    enabled: !!currentTenant,
+  });
+
+  // Seed payments mutation
+  const seedPaymentsMutation = useMutation({
+    mutationFn: () => apiRequest('POST', `/api/tenants/${currentTenant}/payments/seed`),
+    onSuccess: () => {
+      toast({
+        title: "Success",
+        description: "Payment data seeded successfully",
+      });
+      queryClient.invalidateQueries({ queryKey: ['/api/tenants', currentTenant, 'payments'] });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to seed payment data",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleSeedPayments = () => {
+    if (currentTenant) {
+      seedPaymentsMutation.mutate();
+    }
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
+      case "completed":
       case "succeeded":
         return "bg-green-100 text-green-800";
       case "pending":
         return "bg-yellow-100 text-yellow-800";
       case "failed":
         return "bg-red-100 text-red-800";
+      case "refunded":
       case "canceled":
         return "bg-gray-100 text-gray-800";
       default:
@@ -73,20 +101,67 @@ export default function Payments() {
         return "fas fa-money-bill-wave";
       case "custom":
         return "fas fa-handshake";
+      case "transfer":
+        return "fas fa-exchange-alt";
+      case "ach":
+        return "fas fa-university";
       default:
         return "fas fa-question-circle";
     }
   };
 
-  const totalProcessed = mockPayments
-    .filter(payment => payment.status === "succeeded")
-    .reduce((sum, payment) => sum + parseFloat(payment.amount), 0);
+  // Show loading state if data is still loading
+  if (paymentsLoading || statisticsLoading || settingsLoading) {
+    return (
+      <MainLayout>
+        <div className="p-4 sm:p-6 lg:p-8">
+          <div className="flex items-center justify-center h-64">
+            <div className="animate-spin w-8 h-8 border-4 border-primary border-t-transparent rounded-full" />
+          </div>
+        </div>
+      </MainLayout>
+    );
+  }
 
-  const totalPending = mockPayments
-    .filter(payment => payment.status === "pending")
-    .reduce((sum, payment) => sum + parseFloat(payment.amount), 0);
+  // Show error state if there's an error
+  if (paymentsError) {
+    return (
+      <MainLayout>
+        <div className="p-4 sm:p-6 lg:p-8">
+          <div className="text-center text-red-600">
+            <p>Error loading payments: {paymentsError.message}</p>
+            <Button className="mt-4" onClick={() => window.location.reload()}>
+              Retry
+            </Button>
+          </div>
+        </div>
+      </MainLayout>
+    );
+  }
 
-  const failedCount = mockPayments.filter(payment => payment.status === "failed").length;
+  // Add seeding option if no payments exist
+  const showSeedOption = payments.length === 0;
+
+  const defaultStats = {
+    todayProcessed: "0.00",
+    todayPending: "0.00",
+    todayFailed: 0,
+    totalVolume: "0.00",
+  };
+
+  const stats = statistics || defaultStats;
+  const settings = paymentSettings || {
+    paymentMode: "platform",
+    applicationFeeBps: 0,
+    defaultCurrency: "usd",
+  };
+
+  const totalProcessed = parseFloat(stats.todayProcessed);
+  const totalPending = parseFloat(stats.todayPending);
+  const failedCount = stats.todayFailed;
+
+  // Take only the most recent payments for display
+  const recentPayments = payments.slice(0, 5); // Show last 5 payments
 
   return (
     <MainLayout>
@@ -96,10 +171,35 @@ export default function Payments() {
             <h1 className="text-2xl font-bold text-foreground">Payment Processing</h1>
             <p className="mt-1 text-sm text-muted-foreground">Manage Stripe integration and payment methods</p>
           </div>
-          <Button className="mt-4 sm:mt-0" data-testid="button-payment-settings">
-            <i className="fas fa-cog mr-2"></i>
-            Payment Settings
-          </Button>
+          <div className="flex gap-3 mt-4 sm:mt-0">
+            <Dialog open={paymentDialogOpen} onOpenChange={setPaymentDialogOpen}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-process-payment" disabled={!STRIPE_ENABLED}>
+                  <i className="fas fa-credit-card mr-2"></i>
+                  Process Payment
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-2xl">
+                <DialogHeader>
+                  <DialogTitle>Process New Payment</DialogTitle>
+                </DialogHeader>
+                <PaymentForm 
+                  onSuccess={(paymentId) => {
+                    toast({
+                      title: "Payment Successful",
+                      description: `Payment processed successfully. ID: ${paymentId}`,
+                    });
+                    setPaymentDialogOpen(false);
+                  }}
+                  onCancel={() => setPaymentDialogOpen(false)}
+                />
+              </DialogContent>
+            </Dialog>
+            <Button variant="outline" data-testid="button-payment-settings">
+              <i className="fas fa-cog mr-2"></i>
+              Settings
+            </Button>
+          </div>
         </div>
 
         {/* Payment Stats */}
@@ -168,7 +268,7 @@ export default function Payments() {
               <div className="space-y-6">
                 <div>
                   <Label className="text-sm font-medium text-foreground">Payment Mode</Label>
-                  <Select defaultValue={mockPaymentSettings.paymentMode}>
+                  <Select defaultValue={settings.paymentMode || "platform"}>
                     <SelectTrigger className="mt-2" data-testid="select-payment-mode">
                       <SelectValue />
                     </SelectTrigger>
@@ -179,14 +279,14 @@ export default function Payments() {
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground mt-1">
-                    {mockPaymentSettings.paymentMode === "platform" 
+                    {settings.paymentMode === "platform" 
                       ? "Payments processed through our platform account"
                       : "Direct integration with your Stripe account"
                     }
                   </p>
                 </div>
 
-                {mockPaymentSettings.paymentMode !== "platform" && (
+                {settings.paymentMode !== "platform" && (
                   <div>
                     <Label className="text-sm font-medium text-foreground">Stripe Account Status</Label>
                     <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
@@ -210,7 +310,7 @@ export default function Payments() {
                 <div>
                   <Label className="text-sm font-medium text-foreground">Application Fee</Label>
                   <div className="mt-2 text-sm text-foreground" data-testid="text-application-fee">
-                    {(mockPaymentSettings.applicationFeeBps / 100).toFixed(2)}%
+                    {((settings.applicationFeeBps || 0) / 100).toFixed(2)}%
                   </div>
                   <p className="text-xs text-muted-foreground">
                     Platform fee applied to transactions
@@ -220,7 +320,7 @@ export default function Payments() {
                 <div>
                   <Label className="text-sm font-medium text-foreground">Default Currency</Label>
                   <div className="mt-2 text-sm text-foreground font-mono" data-testid="text-default-currency">
-                    {mockPaymentSettings.defaultCurrency.toUpperCase()}
+                    {(settings.defaultCurrency || "usd").toUpperCase()}
                   </div>
                 </div>
               </div>
@@ -253,8 +353,27 @@ export default function Payments() {
             <CardContent className="p-6">
               <h3 className="text-lg font-medium text-foreground mb-4">Recent Payments</h3>
               
+              {showSeedOption && (
+                <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-yellow-800">No payment data found</p>
+                      <p className="text-xs text-yellow-600">Seed sample payment data for testing</p>
+                    </div>
+                    <Button 
+                      size="sm" 
+                      onClick={handleSeedPayments}
+                      disabled={seedPaymentsMutation.isPending}
+                      data-testid="button-seed-payments"
+                    >
+                      {seedPaymentsMutation.isPending ? "Seeding..." : "Seed Data"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+              
               <div className="space-y-4">
-                {mockPayments.map((payment) => (
+                {recentPayments.map((payment: PaymentWithCustomer) => (
                   <div 
                     key={payment.id}
                     className="border border-border rounded-lg p-4 hover:bg-accent/50 transition-colors"
@@ -262,13 +381,13 @@ export default function Payments() {
                   >
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center space-x-3">
-                        <i className={`${getPaymentMethodIcon(payment.paymentMethod)} text-lg text-muted-foreground`}></i>
+                        <i className={`${getPaymentMethodIcon(payment.method)} text-lg text-muted-foreground`}></i>
                         <div>
                           <h4 className="text-sm font-medium text-foreground" data-testid={`text-payment-customer-${payment.id}`}>
-                            {payment.customerName}
+                            {payment.customerName || "Anonymous"}
                           </h4>
                           <p className="text-xs text-muted-foreground">
-                            {new Date(payment.createdAt).toLocaleString()}
+                            {payment.createdAt ? new Date(payment.createdAt).toLocaleString() : "Unknown date"}
                           </p>
                         </div>
                       </div>
@@ -282,10 +401,10 @@ export default function Payments() {
                       </div>
                     </div>
                     
-                    {payment.paymentNotes && (
+                    {payment.notes && (
                       <div className="mt-2 text-xs text-muted-foreground bg-accent/20 p-2 rounded">
                         <i className="fas fa-comment mr-1"></i>
-                        {payment.paymentNotes}
+                        {payment.notes}
                       </div>
                     )}
                     
@@ -301,7 +420,7 @@ export default function Payments() {
                         {payment.id}
                       </span>
                       {payment.chargeId && (
-                        <Button variant="outline" size="sm">
+                        <Button variant="outline" size="sm" data-testid={`button-view-stripe-${payment.id}`}>
                           <i className="fas fa-external-link-alt mr-1"></i>
                           View in Stripe
                         </Button>

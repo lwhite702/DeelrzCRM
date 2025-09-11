@@ -15,6 +15,7 @@ import {
   creditTransactions,
   settingsTenant,
   deliveries,
+  payments,
   type User,
   type UpsertUser,
   type Tenant,
@@ -35,6 +36,8 @@ import {
   type InsertCredit,
   type CreditTransaction,
   type InsertCreditTransaction,
+  type Payment,
+  type InsertPayment,
   type TenantSettings,
 } from "@shared/schema";
 import { db } from "./db";
@@ -110,6 +113,24 @@ export interface IStorage {
   createCreditTransaction(transaction: InsertCreditTransaction): Promise<CreditTransaction>;
   updateCreditBalance(creditId: string, tenantId: string, newBalance: string): Promise<Credit>;
   seedCreditForTenant(tenantId: string): Promise<void>;
+  
+  // Payments
+  getPayments(tenantId: string): Promise<Array<Payment & { customerName?: string }>>;
+  createPayment(payment: InsertPayment): Promise<Payment>;
+  updatePaymentStatus(paymentId: string, tenantId: string, status: string, metadata?: any): Promise<Payment>;
+  getPaymentStatistics(tenantId: string): Promise<{
+    todayProcessed: string;
+    todayPending: string;
+    todayFailed: number;
+    totalVolume: string;
+  }>;
+  getPaymentSettings(tenantId: string): Promise<{
+    paymentMode: string;
+    applicationFeeBps: number;
+    defaultCurrency: string;
+    stripeAccountId?: string;
+  }>;
+  seedPaymentsForTenant(tenantId: string): Promise<void>;
   
   // Deliveries
   getDeliveries(tenantId: string): Promise<Array<{
@@ -699,6 +720,255 @@ export class DatabaseStorage implements IStorage {
     }
 
     console.log(`Seeded ${validCreditData.length} credit accounts and ${validTransactionData.length} transactions for tenant ${tenantId}`);
+  }
+
+  // Payments
+  async getPayments(tenantId: string): Promise<Array<Payment & { customerName?: string }>> {
+    const results = await db
+      .select({
+        id: payments.id,
+        tenantId: payments.tenantId,
+        orderId: payments.orderId,
+        customerId: payments.customerId,
+        amount: payments.amount,
+        currency: payments.currency,
+        status: payments.status,
+        method: payments.method,
+        paymentIntentId: payments.paymentIntentId,
+        chargeId: payments.chargeId,
+        transferId: payments.transferId,
+        refundId: payments.refundId,
+        failureReason: payments.failureReason,
+        notes: payments.notes,
+        metadata: payments.metadata,
+        applicationFeeBps: payments.applicationFeeBps,
+        processingFeeCents: payments.processingFeeCents,
+        createdBy: payments.createdBy,
+        createdAt: payments.createdAt,
+        updatedAt: payments.updatedAt,
+        customerName: customers.name,
+      })
+      .from(payments)
+      .leftJoin(customers, eq(payments.customerId, customers.id))
+      .where(eq(payments.tenantId, tenantId))
+      .orderBy(desc(payments.createdAt));
+    
+    return results as Array<Payment & { customerName?: string }>;
+  }
+
+  async createPayment(payment: InsertPayment): Promise<Payment> {
+    const [newPayment] = await db.insert(payments).values(payment).returning();
+    return newPayment;
+  }
+
+  async updatePaymentStatus(paymentId: string, tenantId: string, status: string, metadata?: any): Promise<Payment> {
+    const [updatedPayment] = await db
+      .update(payments)
+      .set({ 
+        status: status as any,
+        metadata: metadata || null,
+        updatedAt: new Date() 
+      })
+      .where(and(eq(payments.id, paymentId), eq(payments.tenantId, tenantId)))
+      .returning();
+    return updatedPayment;
+  }
+
+  async getPaymentStatistics(tenantId: string): Promise<{
+    todayProcessed: string;
+    todayPending: string;
+    todayFailed: number;
+    totalVolume: string;
+  }> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Get today's processed payments
+    const [processedResult] = await db
+      .select({
+        total: sql<number>`COALESCE(SUM(CAST(${payments.amount} AS DECIMAL)), 0)`,
+      })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.status, "completed"),
+          sql`${payments.createdAt} >= ${today}`
+        )
+      );
+
+    // Get today's pending payments
+    const [pendingResult] = await db
+      .select({
+        total: sql<number>`COALESCE(SUM(CAST(${payments.amount} AS DECIMAL)), 0)`,
+      })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.status, "pending"),
+          sql`${payments.createdAt} >= ${today}`
+        )
+      );
+
+    // Get today's failed payment count
+    const [failedResult] = await db
+      .select({
+        count: sql<number>`COUNT(*)`,
+      })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.status, "failed"),
+          sql`${payments.createdAt} >= ${today}`
+        )
+      );
+
+    // Get total volume (all time completed payments)
+    const [totalResult] = await db
+      .select({
+        total: sql<number>`COALESCE(SUM(CAST(${payments.amount} AS DECIMAL)), 0)`,
+      })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.tenantId, tenantId),
+          eq(payments.status, "completed")
+        )
+      );
+
+    return {
+      todayProcessed: (processedResult?.total || 0).toFixed(2),
+      todayPending: (pendingResult?.total || 0).toFixed(2),
+      todayFailed: Number(failedResult?.count || 0),
+      totalVolume: (totalResult?.total || 0).toFixed(2),
+    };
+  }
+
+  async getPaymentSettings(tenantId: string): Promise<{
+    paymentMode: string;
+    applicationFeeBps: number;
+    defaultCurrency: string;
+    stripeAccountId?: string;
+  }> {
+    const settings = await this.getTenantSettings(tenantId);
+    
+    return {
+      paymentMode: settings?.paymentMode || "platform",
+      applicationFeeBps: settings?.applicationFeeBps || 0,
+      defaultCurrency: settings?.defaultCurrency || "usd",
+      stripeAccountId: settings?.stripeAccountId || undefined,
+    };
+  }
+
+  async seedPaymentsForTenant(tenantId: string): Promise<void> {
+    // Check if tenant exists
+    const tenant = await this.getTenant(tenantId);
+    if (!tenant) {
+      throw new Error(`Tenant ${tenantId} not found`);
+    }
+
+    // Check if payments already exist for this tenant
+    const existingPayments = await db
+      .select({ id: payments.id })
+      .from(payments)
+      .where(eq(payments.tenantId, tenantId))
+      .limit(1);
+
+    if (existingPayments.length > 0) {
+      return; // Already seeded
+    }
+
+    // Get existing customers for this tenant
+    const existingCustomers = await this.getCustomers(tenantId);
+    
+    if (existingCustomers.length === 0) {
+      // Create sample customers first
+      const sampleCustomers = [
+        {
+          tenantId,
+          name: 'John Smith',
+          phone: '(555) 123-4567',
+          email: 'john.smith@example.com',
+          preferredFulfillment: 'pickup' as const,
+        },
+        {
+          tenantId,
+          name: 'Sarah Johnson', 
+          phone: '(555) 234-5678',
+          email: 'sarah.johnson@example.com',
+          preferredFulfillment: 'delivery' as const,
+        },
+        {
+          tenantId,
+          name: 'Mike Wilson',
+          phone: '(555) 345-6789',
+          email: 'mike.wilson@example.com',
+          preferredFulfillment: 'pickup' as const,
+        },
+      ];
+
+      await db.insert(customers).values(sampleCustomers);
+    }
+
+    // Get customers again after potential creation
+    const tenantCustomers = await this.getCustomers(tenantId);
+    const adminUser = await db.select().from(users).limit(1);
+    
+    if (!adminUser.length || !tenantCustomers.length) {
+      return;
+    }
+
+    // Create sample payments
+    const samplePayments = [
+      {
+        tenantId,
+        customerId: tenantCustomers[0].id,
+        amount: "125.50",
+        currency: "usd",
+        status: "completed" as const,
+        method: "card" as const,
+        paymentIntentId: "pi_1234567890",
+        chargeId: "ch_1234567890",
+        notes: "Payment for prescription order",
+        applicationFeeBps: 250,
+        processingFeeCents: 89,
+        createdBy: adminUser[0].id,
+        createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000), // 2 hours ago
+      },
+      {
+        tenantId,
+        customerId: tenantCustomers[1].id,
+        amount: "89.75",
+        currency: "usd",
+        status: "pending" as const,
+        method: "cash" as const,
+        notes: "Cash payment - exact change provided",
+        applicationFeeBps: 0,
+        processingFeeCents: 0,
+        createdBy: adminUser[0].id,
+        createdAt: new Date(Date.now() - 30 * 60 * 1000), // 30 minutes ago
+      },
+      {
+        tenantId,
+        customerId: tenantCustomers[2].id,
+        amount: "67.25",
+        currency: "usd",
+        status: "failed" as const,
+        method: "card" as const,
+        paymentIntentId: "pi_5678901234",
+        failureReason: "insufficient_funds",
+        notes: "Card declined due to insufficient funds",
+        applicationFeeBps: 250,
+        processingFeeCents: 0,
+        createdBy: adminUser[0].id,
+        createdAt: new Date(Date.now() - 4 * 60 * 60 * 1000), // 4 hours ago
+      },
+    ];
+
+    // Insert payments
+    await db.insert(payments).values(samplePayments);
   }
 
   // Deliveries

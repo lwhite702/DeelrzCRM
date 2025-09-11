@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
 import { z } from "zod";
+import Stripe from "stripe";
 import {
   insertTenantSchema,
   insertProductSchema,
@@ -10,11 +11,27 @@ import {
   insertOrderSchema,
   insertCreditSchema,
   insertCreditTransactionSchema,
+  insertPaymentSchema,
   batches,
   products,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, sql } from "drizzle-orm";
+
+// Initialize Stripe (with graceful handling)
+let stripe: Stripe | null = null;
+const STRIPE_ENABLED = !!process.env.STRIPE_SECRET_KEY;
+
+if (STRIPE_ENABLED) {
+  try {
+    stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+    console.log("Stripe initialized successfully");
+  } catch (error) {
+    console.error("Failed to initialize Stripe:", error);
+  }
+} else {
+  console.warn("Stripe not configured - payment processing will be limited to manual methods");
+}
 
 // Tenant membership authorization middleware
 const requireTenantAccess = async (req: any, res: any, next: any) => {
@@ -531,6 +548,313 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       res.status(500).json({ message: "Failed to update credit balance" });
+    }
+  });
+
+  // Payment routes
+  app.get("/api/tenants/:tenantId/payments", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const payments = await storage.getPayments(tenantId);
+      res.json(payments);
+    } catch (error) {
+      console.error("Error fetching payments:", error);
+      res.status(500).json({ message: "Failed to fetch payments" });
+    }
+  });
+
+  app.get("/api/tenants/:tenantId/payments/statistics", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const statistics = await storage.getPaymentStatistics(tenantId);
+      res.json(statistics);
+    } catch (error) {
+      console.error("Error fetching payment statistics:", error);
+      res.status(500).json({ message: "Failed to fetch payment statistics" });
+    }
+  });
+
+  app.get("/api/tenants/:tenantId/payments/settings", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const settings = await storage.getPaymentSettings(tenantId);
+      res.json(settings);
+    } catch (error) {
+      console.error("Error fetching payment settings:", error);
+      res.status(500).json({ message: "Failed to fetch payment settings" });
+    }
+  });
+
+  app.post("/api/tenants/:tenantId/payments", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const userId = req.user.claims.sub;
+      
+      const paymentData = insertPaymentSchema.parse({
+        ...req.body,
+        tenantId,
+        createdBy: userId,
+      });
+      
+      const payment = await storage.createPayment(paymentData);
+      res.json(payment);
+    } catch (error: any) {
+      console.error("Error creating payment:", error);
+      
+      if (error.name === 'ZodError') {
+        return res.status(400).json({ 
+          message: "Invalid payment data", 
+          errors: error.errors 
+        });
+      }
+      
+      if (error.code === '23503') {
+        return res.status(404).json({ message: "Customer or order not found" });
+      }
+      
+      res.status(500).json({ message: "Failed to create payment" });
+    }
+  });
+
+  app.put("/api/tenants/:tenantId/payments/:paymentId/status", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+    try {
+      const { tenantId, paymentId } = req.params;
+      const { status, metadata } = req.body;
+      
+      // Validate status
+      const validStatuses = ["pending", "completed", "failed", "refunded"];
+      if (!validStatuses.includes(status)) {
+        return res.status(400).json({ message: "Invalid payment status" });
+      }
+      
+      // Validate paymentId format (UUID)
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(paymentId)) {
+        return res.status(400).json({ message: "Invalid payment ID format" });
+      }
+      
+      const updatedPayment = await storage.updatePaymentStatus(paymentId, tenantId, status, metadata);
+      res.json(updatedPayment);
+    } catch (error: any) {
+      console.error("Error updating payment status:", error);
+      
+      if (error.code === '23503') {
+        return res.status(404).json({ message: "Payment not found" });
+      }
+      
+      res.status(500).json({ message: "Failed to update payment status" });
+    }
+  });
+
+  app.post("/api/tenants/:tenantId/payments/seed", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      await storage.seedPaymentsForTenant(tenantId);
+      res.json({ message: "Payment data seeded successfully" });
+    } catch (error: any) {
+      console.error("Error seeding payments:", error);
+      
+      if (error.message?.includes("not found")) {
+        return res.status(404).json({ message: error.message });
+      }
+      
+      res.status(500).json({ message: "Failed to seed payment data" });
+    }
+  });
+
+  // Stripe payment processing routes
+  app.post("/api/tenants/:tenantId/create-payment-intent", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+    try {
+      if (!STRIPE_ENABLED || !stripe) {
+        return res.status(503).json({ 
+          message: "Stripe payment processing is not configured. Please contact support or use manual payment methods." 
+        });
+      }
+
+      const { tenantId } = req.params;
+      const { amount, currency = "usd", customerId, orderId, description } = req.body;
+      const userId = req.user.claims.sub;
+
+      if (!amount || amount <= 0) {
+        return res.status(400).json({ message: "Valid amount is required" });
+      }
+
+      // Get tenant payment settings
+      const paymentSettings = await storage.getPaymentSettings(tenantId);
+      
+      // Create payment intent with Stripe
+      const paymentIntentParams: any = {
+        amount: Math.round(amount * 100), // Convert to cents
+        currency,
+        metadata: {
+          tenantId,
+          customerId: customerId || null,
+          orderId: orderId || null,
+        },
+      };
+
+      // Add application fee if configured
+      if (paymentSettings.applicationFeeBps > 0) {
+        const applicationFee = Math.round((amount * paymentSettings.applicationFeeBps) / 10000 * 100);
+        paymentIntentParams.application_fee_amount = applicationFee;
+      }
+
+      // For connect accounts, use connected account
+      if (paymentSettings.paymentMode !== "platform" && paymentSettings.stripeAccountId) {
+        paymentIntentParams.on_behalf_of = paymentSettings.stripeAccountId;
+        paymentIntentParams.transfer_data = {
+          destination: paymentSettings.stripeAccountId,
+        };
+      }
+
+      const paymentIntent = await stripe.paymentIntents.create(paymentIntentParams);
+
+      // Create payment record in our database
+      const paymentData = {
+        tenantId,
+        customerId: customerId || null,
+        orderId: orderId || null,
+        amount: amount.toFixed(2),
+        currency,
+        status: "pending" as const,
+        method: "card" as const,
+        paymentIntentId: paymentIntent.id,
+        notes: description || null,
+        applicationFeeBps: paymentSettings.applicationFeeBps,
+        processingFeeCents: paymentIntentParams.application_fee_amount || 0,
+        createdBy: userId,
+      };
+
+      const payment = await storage.createPayment(paymentData);
+
+      res.json({
+        clientSecret: paymentIntent.client_secret,
+        paymentId: payment.id,
+        paymentIntentId: paymentIntent.id,
+      });
+    } catch (error: any) {
+      console.error("Error creating payment intent:", error);
+      res.status(500).json({ 
+        message: "Error creating payment intent", 
+        error: error.message 
+      });
+    }
+  });
+
+  app.post("/api/tenants/:tenantId/confirm-payment", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const { paymentIntentId, status, chargeId, failureReason } = req.body;
+
+      if (!paymentIntentId) {
+        return res.status(400).json({ message: "Payment intent ID is required" });
+      }
+
+      // Find the payment record
+      const payments = await storage.getPayments(tenantId);
+      const payment = payments.find(p => p.paymentIntentId === paymentIntentId);
+
+      if (!payment) {
+        return res.status(404).json({ message: "Payment not found" });
+      }
+
+      // Update payment status based on result
+      const updateData: any = {
+        status: status || "completed",
+      };
+
+      if (chargeId) {
+        updateData.chargeId = chargeId;
+      }
+
+      if (failureReason) {
+        updateData.failureReason = failureReason;
+        updateData.status = "failed";
+      }
+
+      const updatedPayment = await storage.updatePaymentStatus(
+        payment.id, 
+        tenantId, 
+        updateData.status, 
+        updateData
+      );
+
+      res.json(updatedPayment);
+    } catch (error: any) {
+      console.error("Error confirming payment:", error);
+      res.status(500).json({ 
+        message: "Error confirming payment", 
+        error: error.message 
+      });
+    }
+  });
+
+  app.post("/api/tenants/:tenantId/refund-payment", isAuthenticated, requireTenantAccess, async (req: any, res) => {
+    try {
+      if (!STRIPE_ENABLED || !stripe) {
+        return res.status(503).json({ 
+          message: "Stripe refund processing is not configured. Please contact support for manual refunds." 
+        });
+      }
+
+      const { tenantId } = req.params;
+      const { paymentId, amount, reason } = req.body;
+
+      if (!paymentId) {
+        return res.status(400).json({ message: "Payment ID is required" });
+      }
+
+      // Find the payment record
+      const payments = await storage.getPayments(tenantId);
+      const payment = payments.find(p => p.id === paymentId);
+
+      if (!payment) {
+        return res.status(404).json({ message: "Payment not found" });
+      }
+
+      if (payment.status !== "completed") {
+        return res.status(400).json({ message: "Can only refund completed payments" });
+      }
+
+      if (!payment.chargeId) {
+        return res.status(400).json({ message: "No charge ID found for refund" });
+      }
+
+      // Create refund with Stripe
+      const refundParams: any = {
+        charge: payment.chargeId,
+        reason: reason || "requested_by_customer",
+      };
+
+      if (amount) {
+        refundParams.amount = Math.round(amount * 100); // Convert to cents
+      }
+
+      const refund = await stripe.refunds.create(refundParams);
+
+      // Update payment record
+      await storage.updatePaymentStatus(
+        payment.id,
+        tenantId,
+        "refunded",
+        {
+          refundId: refund.id,
+          refundAmount: refund.amount / 100,
+          refundReason: reason,
+        }
+      );
+
+      res.json({
+        refundId: refund.id,
+        amount: refund.amount / 100,
+        status: refund.status,
+      });
+    } catch (error: any) {
+      console.error("Error processing refund:", error);
+      res.status(500).json({ 
+        message: "Error processing refund", 
+        error: error.message 
+      });
     }
   });
 
