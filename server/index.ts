@@ -212,26 +212,26 @@ app.use((req, res, next) => {
     throw err;
   });
 
-  // Serve static files from public directory in all environments
-  app.use(express.static(path.resolve(import.meta.dirname, '../public')));
-
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes
   if (app.get("env") === "development") {
+    // Serve static files from public directory in development
+    app.use(express.static(path.resolve(import.meta.dirname, '../public')));
     await setupVite(app, server);
   } else {
     // Production: serve built files from correct location
     const staticDir = path.resolve(import.meta.dirname, '..', 'dist', 'public');
-    if (fs.existsSync(staticDir)) {
-      app.use(express.static(staticDir));
-      app.get('*', (_req, res) => {
-        res.sendFile(path.resolve(staticDir, 'index.html'));
-      });
-    } else {
-      // Fallback to default behavior if dist/public doesn't exist
-      serveStatic(app);
+    if (!fs.existsSync(staticDir)) {
+      log('FATAL: Production build directory not found at ' + staticDir);
+      process.exit(1);
     }
+    
+    log('Serving production static files from: ' + staticDir);
+    app.use(express.static(staticDir));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.resolve(staticDir, 'index.html'));
+    });
   }
 
   // ALWAYS serve the app on the port specified in the environment variable PORT
