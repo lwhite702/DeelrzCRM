@@ -32,7 +32,15 @@ export function BrandMark({
   theme = "auto",
   onClick 
 }: BrandMarkProps) {
-  const isDarkMode = theme === "dark" || (theme === "auto" && document.documentElement.classList.contains("dark"));
+  // Safe dark mode detection that works during SSR and CSR
+  const getDarkMode = () => {
+    if (typeof window === "undefined") return false;
+    if (theme === "dark") return true;
+    if (theme === "light") return false;
+    return document.documentElement.classList.contains("dark");
+  };
+
+  const isDarkMode = getDarkMode();
   
   if (variant === "icon") {
     const iconSize = iconSizeMap[size];
@@ -49,6 +57,11 @@ export function BrandMark({
           width={iconSize}
           height={iconSize}
           className="flex-shrink-0"
+          onError={(e) => {
+            console.warn("Logo icon failed to load:", BRAND.assets.favicon);
+            // Hide the image if it fails to load
+            (e.target as HTMLImageElement).style.display = "none";
+          }}
         />
         {showTagline && (
           <div className="flex flex-col">
@@ -70,13 +83,22 @@ export function BrandMark({
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
     >
-      <img
-        src={logoSrc}
-        alt={BRAND.name}
-        width={width}
-        height={height}
-        className="flex-shrink-0"
-      />
+      <picture>
+        <img
+          src={logoSrc}
+          alt={BRAND.name}
+          width={width}
+          height={height}
+          className="flex-shrink-0"
+          onError={(e) => {
+            console.warn("Logo failed to load:", logoSrc);
+            // Try fallback to light logo if dark fails
+            if (logoSrc === BRAND.assets.logoDark) {
+              (e.target as HTMLImageElement).src = BRAND.assets.logoLight;
+            }
+          }}
+        />
+      </picture>
       {showTagline && (
         <p className="mt-1 text-xs text-muted-foreground max-w-[200px]">
           {BRAND.tagline}
