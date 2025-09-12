@@ -4,6 +4,7 @@ import compression from "compression";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import path from "path";
+import fs from "fs";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
@@ -220,7 +221,17 @@ app.use((req, res, next) => {
   if (app.get("env") === "development") {
     await setupVite(app, server);
   } else {
-    serveStatic(app);
+    // Production: serve built files from correct location
+    const staticDir = path.resolve(import.meta.dirname, '..', 'dist', 'public');
+    if (fs.existsSync(staticDir)) {
+      app.use(express.static(staticDir));
+      app.get('*', (_req, res) => {
+        res.sendFile(path.resolve(staticDir, 'index.html'));
+      });
+    } else {
+      // Fallback to default behavior if dist/public doesn't exist
+      serveStatic(app);
+    }
   }
 
   // ALWAYS serve the app on the port specified in the environment variable PORT
