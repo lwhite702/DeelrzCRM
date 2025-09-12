@@ -308,7 +308,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...req.body,
         tenantId,
       });
-      const customer = await storage.createCustomer(customerData);
+      // Use encrypted customer creation with dual-write support
+      const customer = await storage.createCustomerEncrypted(customerData);
       res.json(customer);
     } catch (error) {
       console.error("Error creating customer:", error);

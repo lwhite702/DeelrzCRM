@@ -48,9 +48,13 @@ import {
   userSettings,
   type UserSettings,
   type InsertUserSettings,
+  tenantKeys,
+  type TenantKey,
+  type InsertTenantKey,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sql, or, like, ilike, isNull } from "drizzle-orm";
+import { encrypt, decrypt, encryptOptional, decryptOptional, type EncryptedBlob } from "./crypto";
 
 export interface IStorage {
   // User operations (required for Replit Auth)
@@ -178,6 +182,31 @@ export interface IStorage {
   
   // Development/Test Seeding
   seedLoyaltyForTenant(tenantId: string): Promise<void>;
+  
+  // Feature Flag Seeding
+  seedFeatureFlags(): Promise<void>;
+  
+  // Encryption Support
+  isEncryptionEnabled(tenantId: string): Promise<boolean>;
+  createCustomerEncrypted(customer: InsertCustomer): Promise<Customer>;
+  getCustomerDecrypted(id: string, tenantId: string): Promise<Customer | undefined>;
+  
+  // Delivery encryption support  
+  getDeliveriesDecrypted(tenantId: string): Promise<Array<{
+    id: string;
+    orderId: string;
+    method: string;
+    addressLine1: string;
+    city: string;
+    state: string;
+    fee: string;
+    status: string;
+    createdAt: Date | null;
+    orderTotal: string;
+    customerName: string;
+    customerPhone?: string;
+  }>>;
+  createDeliveryEncrypted(delivery: any): Promise<any>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -357,7 +386,31 @@ export class DatabaseStorage implements IStorage {
 
   // Customers
   async getCustomers(tenantId: string): Promise<Customer[]> {
-    return await db.select().from(customers).where(eq(customers.tenantId, tenantId));
+    const customerList = await db.select().from(customers).where(eq(customers.tenantId, tenantId));
+    
+    // Check if encryption is enabled for this tenant
+    const encryptionEnabled = await this.isEncryptionEnabled(tenantId);
+    
+    if (encryptionEnabled) {
+      // Decrypt all customers in the list
+      const decryptedCustomers = await Promise.all(
+        customerList.map(async (customer) => {
+          if (customer.nameEnc) {
+            return {
+              ...customer,
+              name: customer.nameEnc ? await decryptOptional(tenantId, customer.nameEnc) : customer.name,
+              phone: customer.phoneEnc ? await decryptOptional(tenantId, customer.phoneEnc) : customer.phone,
+              email: customer.emailEnc ? await decryptOptional(tenantId, customer.emailEnc) : customer.email,
+              notes: customer.notesEnc ? await decryptOptional(tenantId, customer.notesEnc) : customer.notes,
+            };
+          }
+          return customer;
+        })
+      );
+      return decryptedCustomers;
+    }
+    
+    return customerList;
   }
 
   async getCustomersWithDetails(tenantId: string): Promise<Array<Customer & { 
@@ -367,7 +420,7 @@ export class DatabaseStorage implements IStorage {
     creditBalance?: string;
     creditStatus?: string;
   }>> {
-    // Get all customers for the tenant
+    // Get all customers for the tenant (already handles decryption)
     const customerList = await this.getCustomers(tenantId);
 
     // Get loyalty data for all customers in one query
@@ -395,7 +448,7 @@ export class DatabaseStorage implements IStorage {
     const loyaltyMap = new Map(loyaltyData.map(l => [l.customerId, l]));
     const creditMap = new Map(creditData.map(c => [c.customerId, c]));
 
-    // Combine data for each customer
+    // Combine data for each customer (customers are already decrypted from getCustomers call)
     const customersWithDetails = customerList.map(customer => {
       const loyalty = loyaltyMap.get(customer.id);
       const credit = creditMap.get(customer.id);
@@ -419,11 +472,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getCustomer(id: string, tenantId: string): Promise<Customer | undefined> {
-    const [customer] = await db
-      .select()
-      .from(customers)
-      .where(and(eq(customers.id, id), eq(customers.tenantId, tenantId)));
-    return customer;
+    // Use the dedicated decryption method for consistent handling
+    return await this.getCustomerDecrypted(id, tenantId);
   }
 
   // Orders
@@ -1049,35 +1099,8 @@ export class DatabaseStorage implements IStorage {
     customerName: string;
     customerPhone?: string;
   }>> {
-    const results = await db
-      .select({
-        id: deliveries.id,
-        orderId: deliveries.orderId,
-        method: deliveries.method,
-        addressLine1: deliveries.addressLine1,
-        city: deliveries.city,
-        state: deliveries.state,
-        fee: deliveries.fee,
-        status: deliveries.status,
-        createdAt: deliveries.createdAt,
-        orderTotal: orders.total,
-        customerName: customers.name,
-        customerPhone: customers.phone,
-      })
-      .from(deliveries)
-      .innerJoin(orders, eq(deliveries.orderId, orders.id))
-      .leftJoin(customers, eq(orders.customerId, customers.id))
-      .where(eq(deliveries.tenantId, tenantId))
-      .orderBy(desc(deliveries.createdAt));
-
-    return results.map(r => ({
-      ...r,
-      customerName: r.customerName || 'Walk-in Customer',
-      addressLine1: r.addressLine1 || '',
-      city: r.city || '',
-      state: r.state || '',
-      customerPhone: r.customerPhone || undefined,
-    }));
+    // Use the decrypted method for consistent handling
+    return await this.getDeliveriesDecrypted(tenantId);
   }
 
   // Development/Test Seeding Functions
@@ -2183,6 +2206,248 @@ X-RateLimit-Reset: 1642284000
       })
       .returning();
     return result;
+  }
+
+  // Encryption Support Methods
+  async isEncryptionEnabled(tenantId: string): Promise<boolean> {
+    try {
+      const tenantFlags = await this.getTenantFeatureFlags(tenantId);
+      return tenantFlags['encryption_enabled'] || false;
+    } catch (error) {
+      console.error(`Failed to check encryption status for tenant ${tenantId}:`, error);
+      return false;
+    }
+  }
+
+  async createCustomerEncrypted(customer: InsertCustomer): Promise<Customer> {
+    try {
+      const { tenantId } = customer;
+      const encryptionEnabled = await this.isEncryptionEnabled(tenantId);
+      
+      if (encryptionEnabled) {
+        // SECURITY FIX: Only store encrypted data, clear plaintext fields
+        const customerData = {
+          ...customer,
+          // Clear plaintext fields for security
+          name: null,
+          phone: null,
+          email: null,
+          notes: null,
+          // Store only encrypted versions of sensitive fields
+          nameEnc: customer.name ? await encryptOptional(tenantId, customer.name) : null,
+          phoneEnc: customer.phone ? await encryptOptional(tenantId, customer.phone) : null,
+          emailEnc: customer.email ? await encryptOptional(tenantId, customer.email) : null,
+          notesEnc: customer.notes ? await encryptOptional(tenantId, customer.notes) : null,
+        };
+        
+        const [newCustomer] = await db.insert(customers).values(customerData).returning();
+        return newCustomer;
+      } else {
+        // Fallback to regular customer creation if encryption is disabled
+        return this.createCustomer(customer);
+      }
+    } catch (error) {
+      console.error(`Failed to create encrypted customer for tenant ${customer.tenantId}:`, error);
+      throw new Error("Failed to create customer");
+    }
+  }
+
+  async getCustomerDecrypted(id: string, tenantId: string): Promise<Customer | undefined> {
+    try {
+      const [customer] = await db
+        .select()
+        .from(customers)
+        .where(and(eq(customers.id, id), eq(customers.tenantId, tenantId)));
+      
+      if (!customer) {
+        return undefined;
+      }
+      
+      const encryptionEnabled = await this.isEncryptionEnabled(tenantId);
+      
+      if (encryptionEnabled && customer.nameEnc) {
+        // If encrypted data exists and encryption is enabled, decrypt it
+        const decryptedCustomer = {
+          ...customer,
+          name: customer.nameEnc ? await decryptOptional(tenantId, customer.nameEnc) : customer.name,
+          phone: customer.phoneEnc ? await decryptOptional(tenantId, customer.phoneEnc) : customer.phone,
+          email: customer.emailEnc ? await decryptOptional(tenantId, customer.emailEnc) : customer.email,
+          notes: customer.notesEnc ? await decryptOptional(tenantId, customer.notesEnc) : customer.notes,
+        };
+        
+        return decryptedCustomer;
+      }
+      
+      // Return customer as-is if encryption is not enabled or no encrypted data exists
+      return customer;
+    } catch (error) {
+      console.error(`Failed to get decrypted customer ${id} for tenant ${tenantId}:`, error);
+      throw new Error("Failed to retrieve customer");
+    }
+  }
+
+  // Delivery encryption methods
+  async getDeliveriesDecrypted(tenantId: string): Promise<Array<{
+    id: string;
+    orderId: string;
+    method: string;
+    addressLine1: string;
+    city: string;
+    state: string;
+    fee: string;
+    status: string;
+    createdAt: Date | null;
+    orderTotal: string;
+    customerName: string;
+    customerPhone?: string;
+  }>> {
+    try {
+      // Get raw delivery data with encrypted fields
+      const results = await db
+        .select({
+          id: deliveries.id,
+          orderId: deliveries.orderId,
+          method: deliveries.method,
+          addressLine1: deliveries.addressLine1,
+          city: deliveries.city,
+          state: deliveries.state,
+          fee: deliveries.fee,
+          status: deliveries.status,
+          createdAt: deliveries.createdAt,
+          orderTotal: orders.total,
+          customerName: customers.name,
+          customerPhone: customers.phone,
+          // Include encrypted fields for potential decryption
+          addressLine1Enc: deliveries.addressLine1Enc,
+          cityEnc: deliveries.cityEnc,
+          stateEnc: deliveries.stateEnc,
+          postalCodeEnc: deliveries.postalCodeEnc,
+        })
+        .from(deliveries)
+        .innerJoin(orders, eq(deliveries.orderId, orders.id))
+        .leftJoin(customers, eq(orders.customerId, customers.id))
+        .where(eq(deliveries.tenantId, tenantId))
+        .orderBy(desc(deliveries.createdAt));
+
+      const encryptionEnabled = await this.isEncryptionEnabled(tenantId);
+
+      // Decrypt delivery addresses if encryption is enabled
+      if (encryptionEnabled) {
+        const decryptedResults = await Promise.all(
+          results.map(async (result) => {
+            return {
+              ...result,
+              addressLine1: result.addressLine1Enc
+                ? await decryptOptional(tenantId, result.addressLine1Enc) || result.addressLine1 || ''
+                : result.addressLine1 || '',
+              city: result.cityEnc
+                ? await decryptOptional(tenantId, result.cityEnc) || result.city || ''
+                : result.city || '',
+              state: result.stateEnc
+                ? await decryptOptional(tenantId, result.stateEnc) || result.state || ''
+                : result.state || '',
+              customerName: result.customerName || 'Walk-in Customer',
+              customerPhone: result.customerPhone || undefined,
+            };
+          })
+        );
+        return decryptedResults;
+      }
+
+      // Return regular results if encryption is not enabled
+      return results.map(r => ({
+        ...r,
+        customerName: r.customerName || 'Walk-in Customer',
+        addressLine1: r.addressLine1 || '',
+        city: r.city || '',
+        state: r.state || '',
+        customerPhone: r.customerPhone || undefined,
+      }));
+    } catch (error) {
+      console.error(`Failed to get decrypted deliveries for tenant ${tenantId}:`, error);
+      throw new Error("Failed to retrieve deliveries");
+    }
+  }
+
+  async createDeliveryEncrypted(delivery: any): Promise<any> {
+    try {
+      const { tenantId } = delivery;
+      const encryptionEnabled = await this.isEncryptionEnabled(tenantId);
+      
+      if (encryptionEnabled) {
+        // SECURITY FIX: Only store encrypted data, clear plaintext fields
+        const deliveryData = {
+          ...delivery,
+          // Clear plaintext fields for security
+          addressLine1: null,
+          city: null,
+          state: null,
+          postalCode: null,
+          // Store only encrypted versions of sensitive fields
+          addressLine1Enc: delivery.addressLine1 ? await encryptOptional(tenantId, delivery.addressLine1) : null,
+          cityEnc: delivery.city ? await encryptOptional(tenantId, delivery.city) : null,
+          stateEnc: delivery.state ? await encryptOptional(tenantId, delivery.state) : null,
+          postalCodeEnc: delivery.postalCode ? await encryptOptional(tenantId, delivery.postalCode) : null,
+        };
+        
+        const [newDelivery] = await db.insert(deliveries).values(deliveryData).returning();
+        return newDelivery;
+      } else {
+        // Fallback to regular delivery creation if encryption is disabled
+        const [newDelivery] = await db.insert(deliveries).values(delivery).returning();
+        return newDelivery;
+      }
+    } catch (error) {
+      console.error(`Failed to create encrypted delivery for tenant ${delivery.tenantId}:`, error);
+      throw new Error("Failed to create delivery");
+    }
+  }
+
+  // Feature Flag Seeding
+  async seedFeatureFlags(): Promise<void> {
+    try {
+      // Check if feature flags already exist
+      const existingFlags = await db.select().from(featureFlags).limit(1);
+      if (existingFlags.length > 0) {
+        return; // Already seeded
+      }
+
+      // Define critical feature flags including encryption
+      const coreFeatureFlags = [
+        {
+          key: 'encryption_enabled',
+          description: 'Enable end-to-end encryption for sensitive customer and delivery data. When enabled, sensitive fields are encrypted at rest using tenant-specific keys.',
+          defaultEnabled: false, // Default to false for security and opt-in approach
+        },
+        {
+          key: 'advanced_analytics',
+          description: 'Enable advanced analytics and reporting features',
+          defaultEnabled: true,
+        },
+        {
+          key: 'api_access',
+          description: 'Enable API access for third-party integrations',
+          defaultEnabled: false,
+        },
+        {
+          key: 'multi_location',
+          description: 'Enable multi-location support for pharmacy chains',
+          defaultEnabled: false,
+        },
+        {
+          key: 'automated_reordering',
+          description: 'Enable automated inventory reordering based on thresholds',
+          defaultEnabled: true,
+        },
+      ];
+
+      // Insert all feature flags
+      await db.insert(featureFlags).values(coreFeatureFlags);
+      console.log(`Seeded ${coreFeatureFlags.length} feature flags including encryption support`);
+    } catch (error) {
+      console.error('Failed to seed feature flags:', error);
+      throw new Error('Feature flag seeding failed');
+    }
   }
 }
 

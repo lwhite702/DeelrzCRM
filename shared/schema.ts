@@ -55,6 +55,7 @@ export const creditTransactionStatusEnum = pgEnum("credit_transaction_status", [
 export const paymentModeEnum = pgEnum("payment_mode", ["platform", "connect_standard", "connect_express"]);
 export const paymentMethodEnum = pgEnum("payment_method", ["card", "cash", "custom", "transfer", "ach"]);
 export const kbCategoryEnum = pgEnum("kb_category", ["getting_started", "features", "troubleshooting", "billing", "api", "integrations", "other"]);
+export const keyStatusEnum = pgEnum("key_status", ["active", "revoked"]);
 
 // Tenants
 export const tenants = pgTable("tenants", {
@@ -65,6 +66,21 @@ export const tenants = pgTable("tenants", {
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (table) => [
   index("idx_tenants_status").on(table.status),
+]);
+
+// Tenant Keys for envelope encryption
+export const tenantKeys = pgTable("tenant_keys", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  keyVersion: integer("key_version").notNull().default(1),
+  wrappedKey: varchar("wrapped_key", { length: 2048 }).notNull(), // Base64 encoded encrypted data key
+  status: keyStatusEnum("status").notNull().default("active"),
+  createdAt: timestamp("created_at").defaultNow(),
+  revokedAt: timestamp("revoked_at"),
+}, (table) => [
+  index("idx_tenant_keys_tenant").on(table.tenantId),
+  index("idx_tenant_keys_status").on(table.status),
+  index("idx_tenant_keys_version").on(table.keyVersion),
 ]);
 
 // Users-Tenants junction table
@@ -167,6 +183,11 @@ export const customers = pgTable("customers", {
   preferredFulfillment: fulfillmentMethodEnum("preferred_fulfillment").default("pickup"),
   preferredPayment: varchar("preferred_payment", { length: 50 }),
   notes: text("notes"),
+  // Encrypted fields for dual-write approach
+  nameEnc: jsonb("name_enc"), // Encrypted name
+  phoneEnc: jsonb("phone_enc"), // Encrypted phone
+  emailEnc: jsonb("email_enc"), // Encrypted email
+  notesEnc: jsonb("notes_enc"), // Encrypted notes
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
   index("idx_customers_tenant").on(table.tenantId),
@@ -228,6 +249,11 @@ export const deliveries = pgTable("deliveries", {
   lon: decimal("lon", { precision: 10, scale: 7 }),
   fee: decimal("fee", { precision: 10, scale: 2 }).notNull().default("0"),
   status: deliveryStatusEnum("status").notNull().default("requested"),
+  // Encrypted fields for dual-write approach
+  addressLine1Enc: jsonb("address_line1_enc"), // Encrypted address
+  cityEnc: jsonb("city_enc"), // Encrypted city
+  stateEnc: jsonb("state_enc"), // Encrypted state
+  postalCodeEnc: jsonb("postal_code_enc"), // Encrypted postal code
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => [
   index("idx_deliveries_tenant").on(table.tenantId),
@@ -532,6 +558,8 @@ export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
 export type Tenant = typeof tenants.$inferSelect;
 export type InsertTenant = typeof tenants.$inferInsert;
+export type TenantKey = typeof tenantKeys.$inferSelect;
+export type InsertTenantKey = typeof tenantKeys.$inferInsert;
 export type UserTenant = typeof usersTenants.$inferSelect;
 export type InsertUserTenant = typeof usersTenants.$inferInsert;
 export type Product = typeof products.$inferSelect;
