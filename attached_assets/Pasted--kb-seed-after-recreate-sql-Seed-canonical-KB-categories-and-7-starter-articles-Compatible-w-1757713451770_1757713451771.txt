@@ -1,0 +1,242 @@
+-- kb_seed_after_recreate.sql
+-- Seed canonical KB categories and 7 starter articles
+-- Compatible with the recreated tables (no auth schema, created_by BIGINT)
+
+-- 1) Seed categories (idempotent)
+INSERT INTO public.kb_categories (key, name) VALUES
+  ('onboarding','Onboarding'),
+  ('troubleshooting','Troubleshooting'),
+  ('api','API & Integrations'),
+  ('features','Features & Modules'),
+  ('inventory','Inventory'),
+  ('sales','Sales / POS'),
+  ('customers','Customers & Loyalty'),
+  ('credit','Credit'),
+  ('delivery','Delivery'),
+  ('dashboard','Dashboard'),
+  ('billing','Billing & Subscription'),
+  ('admin','Administration')
+ON CONFLICT (key) DO UPDATE SET name = EXCLUDED.name;
+
+-- 2) Upsert 7 core articles (created_by = 45450370)
+
+-- A) Getting Started → onboarding
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='onboarding')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'Getting Started with DeelrzCRM',
+  'getting-started-guide',
+  'getting_started',
+  (SELECT id FROM cat),
+  $MD$
+# Getting Started with DeelrzCRM
+
+Welcome to DeelrzCRM! 🎉
+
+1. Go to **/login** (invite required in beta).
+2. If you belong to multiple orgs, pick your **tenant**.
+3. The **Dashboard** shows KPIs, alerts, and module links.
+4. Use the sidebar for **Inventory, Sales, Customers, Delivery, Loyalty, Credit, Settings**.
+
+> Tip: Press **F1** (or **Ctrl+?**) for Help at any time.
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category,
+  category_id=EXCLUDED.category_id, content_md=EXCLUDED.content_md,
+  created_by=EXCLUDED.created_by;
+
+-- B) Troubleshooting → troubleshooting
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='troubleshooting')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'Common Technical Issues and Solutions',
+  'troubleshooting-guide',
+  'troubleshooting',
+  (SELECT id FROM cat),
+  $MD$
+# Common Technical Issues & Solutions
+
+**Login issues**
+- Verify invite email and tenant selection.
+- Clear cookies or try an incognito window.
+
+**Stripe payment fails**
+- Check test vs live mode.
+- Confirm total > $0 and supported currency.
+
+**Delivery estimate seems off**
+- Verify addresses/coordinates (lat −90..90, lon −180..180).
+
+Use **Settings → Help** to contact support.
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category,
+  category_id=EXCLUDED.category_id, content_md=EXCLUDED.content_md,
+  created_by=EXCLUDED.created_by;
+
+-- C) API Guide → api
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='api')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'API Documentation & Integration Guide',
+  'api-integration-guide',
+  'api',
+  (SELECT id FROM cat),
+  $MD$
+# API & Integration Guide
+
+Secure tenant-scoped endpoints:
+
+- **Auth**: bearer tokens (tenant-scoped).
+- **Inventory**: batches, adjustments.
+- **Sales**: orders, confirmations, receipts.
+- **Delivery**: fee estimate & confirmations.
+- **Webhooks**: Stripe payment updates.
+
+Get keys in **Settings → Developer**. Rotate regularly.
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category,
+  category_id=EXCLUDED.category_id, content_md=EXCLUDED.content_md,
+  created_by=EXCLUDED.created_by;
+
+-- D) Sales POS → sales
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='sales')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'Sales Point of Sale (POS) System',
+  'sales-pos-system',
+  'features',
+  (SELECT id FROM cat),
+  $MD$
+# Sales POS
+
+Create orders, accept payments, and issue receipts.
+
+1. Add items to cart.
+2. Choose payment: **Cash**, **Card (Stripe)**, or **Credit**.
+3. Confirm sale → FIFO inventory deduction + loyalty update.
+4. Download/print receipt.
+
+*Tip:* **Tender → Quantity** suggests item quantity for a given amount paid.
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category,
+  category_id=EXCLUDED.category_id, content_md=EXCLUDED.content_md,
+  created_by=EXCLUDED.created_by;
+
+-- E) Billing → billing
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='billing')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'Billing & Payment Information',
+  'billing-payment-info',
+  'billing',
+  (SELECT id FROM cat),
+  $MD$
+# Billing & Payment Information
+
+**Subscription**
+- Plans billed monthly; manage under **Settings → Billing**.
+
+**POS Payments**
+- **Cash**: record amount + notes.
+- **Card**: Stripe PaymentIntent flow confirms in-app.
+- **Credit**: for eligible customers; balances tracked.
+
+**Invoices & Receipts**
+- Download from order history or email the customer.
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category,
+  category_id=EXCLUDED.category_id, content_md=EXCLUDED.content_md,
+  created_by=EXCLUDED.created_by;
+
+-- F) Inventory → inventory
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='inventory')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'Managing Your Inventory',
+  'inventory-management-guide',
+  'features',
+  (SELECT id FROM cat),
+  $MD$
+# Managing Your Inventory
+
+Lot/batch tracking with **FIFO** and **WAC**.
+
+- **Add Batch**: product, supplier, qty/weight, unit cost, date.
+- **Adjustments**: record samples, waste, corrections (audited).
+- **Restock Alerts**: forecasting helps prevent stockouts.
+
+Use consistent product names for clean reporting.
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category,
+  category_id=EXCLUDED.category_id, content_md=EXCLUDED.content_md,
+  created_by=EXCLUDED.created_by;
+
+-- G) Customers & Loyalty → customers
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='customers')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'Customer Management & Loyalty Programs',
+  'customer-management',
+  'features',
+  (SELECT id FROM cat),
+  $MD$
+# Customer Management & Loyalty
+
+A profile includes:
+- Name & contact info
+- Preferred fulfillment/payment
+- Purchase history, loyalty points, credit status
+
+**Loyalty**
+- Tiers: Bronze, Silver, Gold, Platinum
+- Points accrue on paid orders; redeemable at checkout.
+
+Admins can set VIP pricing per customer.
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category,
+  category_id=EXCLUDED.category_id, content_md=EXCLUDED.content_md,
+  created_by=EXCLUDED.created_by;
+
+-- 3) Optional helper view (recreate if needed; uses TEXT casts)
+DROP VIEW IF EXISTS public.kb_articles_with_category;
+
+CREATE OR REPLACE VIEW public.kb_articles_with_category AS
+SELECT
+  a.id,
+  a.tenant_id,
+  a.title,
+  a.slug,
+  COALESCE(c.name::text, a.category::text) AS category_name,
+  c.key::text                              AS category_key,
+  a.content_md,
+  a.created_by,
+  a.created_at
+FROM public.kb_articles a
+LEFT JOIN public.kb_categories c ON c.id = a.category_id;

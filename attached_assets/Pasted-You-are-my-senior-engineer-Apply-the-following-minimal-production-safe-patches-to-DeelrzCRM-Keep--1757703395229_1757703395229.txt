@@ -1,0 +1,75 @@
+You are my senior engineer. Apply the following minimal, production-safe patches to DeelrzCRM. Keep diffs small and typed. Do not change public API shapes beyond doc’d errors.
+
+A) RATE LIMIT + ERROR HANDLER (server/index.ts)
+- Add:
+  const limiter = rateLimit({ windowMs: 15*60*1000, max: 100, standardHeaders: true, legacyHeaders: false });
+  app.use(limiter);
+- If auth routes exist under /api/auth, add a stricter limiter there (e.g., 50/15min).
+- Add request id middleware near the top:
+  import { nanoid } from "nanoid";
+  app.use((req,res,next)=>{ (req as any).reqId = `r_${nanoid(8)}`; next(); });
+- Add a final error handler:
+  app.use((err, req, res, _next) => {
+    const id = (req as any).reqId || "r_unknown";
+    const status = err.statusCode || err.status || 500;
+    if (app.get("env") !== "development") console.error(`[${id}]`, err.message);
+    res.status(status).json({ error: status >= 500 ? "Internal Server Error" : String(err.message || "Error"), requestId: id });
+  });
+
+B) ROBOTS.TXT IN BETA (server/index.ts)
+- If process.env.BETA_NOINDEX === "true":
+  1) Ensure global header on all responses: X-Robots-Tag: "noindex, nofollow, noarchive"
+  2) Add GET /robots.txt returning:
+     text/plain body:
+       User-agent: *
+       Disallow: /
+- Leave existing CSP/middleware intact.
+
+C) DELIVERY ESTIMATOR HARDENING (server/routes.ts)
+- For POST /tenants/:tenantId/delivery/estimate:
+  1) Add Zod.strict() schema requiring numeric coords:
+     { pickupLat: number, pickupLon: number, dropoffLat: number, dropoffLon: number, priority?: "standard"|"rush", weightKg?: number }
+     - Clamp: lat in [-90, 90], lon in [-180, 180]
+     - If invalid/missing, return res.status(400).json({ message: "Invalid request data" })
+  2) Haversine distance (miles). minutes = max(5, (distance/20)*60).
+  3) Pricing:
+     base=5.0, perMile=1.5, perMin=0.25, minFee=7.0; weight surcharge (over 5kg) = (weightKg-5)*0.25; rush +30%.
+  4) Response:
+     { distance: "X.Y mi", estimatedMinutes: integer, fee: "NN.NN" }
+- Add unit tests (vitest) for invalid coords (expect 400) and a happy path.
+
+D) STRIPE CONFIRM IDEMPOTENCY (server/routes.ts)
+- In POST /tenants/:tenantId/confirm-payment:
+  1) Zod.strict() body: { paymentIntentId: string, paymentId: string }
+  2) Lookup payment row by paymentId; if status in ('succeeded','failed'), return 200 with row (idempotent).
+  3) Fetch PaymentIntent from Stripe, map final status, update row inside a transaction, and return updated row.
+
+E) CSP DEV vs PROD (server/index.ts)
+- Keep dev relaxed; for production ensure:
+  default-src 'self';
+  script-src 'self' https://js.stripe.com;
+  style-src 'self' 'unsafe-inline';
+  connect-src 'self' https: wss:;
+  img-src 'self' data: https:;
+  frame-src https://js.stripe.com;
+- No unsafe-eval in prod.
+
+F) DEV LOGGING & SESSION TOUCH-UPS
+- Add `morgan('dev')` in development only.
+- Confirm session cookie options: httpOnly: true; secure: NODE_ENV==='production'; sameSite: 'lax' or 'strict'.
+
+G) ACCEPTANCE / CHECKS
+- Add a tiny test or script to verify:
+  1) GET /robots.txt returns Disallow when BETA_NOINDEX=true
+  2) POST delivery/estimate with malformed coords → 400
+  3) delivery/estimate with valid coords → 200, shape { distance, estimatedMinutes, fee }
+  4) calling confirm-payment twice returns same finalized row (idempotent)
+- Run: pnpm check && pnpm build && pnpm start, then print changed files list.
+
+Commit messages:
+- feat(security): enable global rate limiting and error handler
+- feat(robots): serve robots.txt in beta noindex mode
+- feat(delivery): strict input validation + haversine + rush/weight pricing
+- fix(payments): idempotent payment confirmation
+- chore(csp): tighten production CSP
+- chore(devx): dev logger and session cookie options
