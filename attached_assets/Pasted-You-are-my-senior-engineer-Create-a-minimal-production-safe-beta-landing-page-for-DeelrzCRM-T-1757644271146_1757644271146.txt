@@ -1,0 +1,72 @@
+You are my senior engineer. Create a minimal, production-safe **beta landing page** for DeelrzCRM. This is NOT a marketing site — it is a private entry point for invited users during beta testing.
+
+====================
+REQUIREMENTS
+====================
+1. Layout & Branding
+- **Logo must be featured at the very top, centered horizontally**.
+- Below the logo, show the app name and tagline:
+  • Title: “DeelrzCRM — Beta Access”
+  • Subtitle: “High Business. High Quality CRM. Powered by Clouds.”
+- Use `<BrandMark />` for the logo, with light/dark mode switching.
+- Tailwind + existing brand tokens.
+
+2. Content
+- Primary CTA: centered **“Log in”** button linking to `/login`.
+- Secondary link: “Learn what’s included” → scroll to features.
+- Features list (bulleted, centered under hero):
+  • Multi-tenant dashboard & role-based access  
+  • Inventory with FIFO/WAC and batch tracking  
+  • Sales POS with cash/card/custom payments  
+  • Delivery estimates (pickup/manual courier)  
+  • Loyalty tiers & credit controls  
+  • Stripe payments (platform or Connect-ready)
+- Add a simple **Modules dropdown** (centered, beneath features):
+  • Items: Dashboard, Inventory, Customers, Sales POS, Delivery, Loyalty, Credit, Payments, Settings.
+
+3. Footer
+- Centered small text: “Private beta. Access by invitation only.”
+- Contact: link `mailto:support@…` (env-driven).
+
+4. No Indexing / No Crawling (MANDATORY)
+- Meta tags on every page:
+  `<meta name="robots" content="noindex,nofollow,noarchive" />`
+  `<meta name="googlebot" content="noindex,nofollow,noarchive" />`
+- HTTP header: `X-Robots-Tag: noindex, nofollow, noarchive`
+- robots.txt:  
+
+User-agent: *
+Disallow: /
+
+- Disable sitemap generation.
+- Use env flag `BETA_NOINDEX=true` so middleware enforces headers/meta globally.
+
+5. Access Control (Optional Hardening)
+- If `BETA_BASIC_AUTH=1`, require Basic Auth using env `BETA_USER` / `BETA_PASS`.
+
+====================
+TECH DETAILS
+====================
+- Place landing page at `/` (`src/pages/index.tsx` or framework equivalent).
+- Use Tailwind for layout (grid, flex, spacing).
+- Logo and all content centered in a max-width container, mobile-first responsive.
+- Global middleware: inject `X-Robots-Tag` and remove sitemap.
+- Provide `.env.example`:
+• `BETA_NOINDEX=true`  
+• `BETA_BASIC_AUTH=0`  
+• `BETA_USER=`  
+• `BETA_PASS=`
+
+====================
+ACCEPTANCE CRITERIA
+====================
+- Visiting `/` shows:
+• Centered logo at top  
+• App name + tagline  
+• Centered Login button  
+• Features list and Modules dropdown  
+• Footer with invite-only text  
+- All responses include correct noindex headers.  
+- robots.txt disallows all crawling.  
+- Works on mobile and desktop.  
+- Basic Auth works if enabled.  

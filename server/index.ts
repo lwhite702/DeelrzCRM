@@ -123,6 +123,49 @@ const limiter = rateLimit({
 
 app.use(limiter);
 
+// Beta Security Middleware
+// Robot blocking headers - applied globally to prevent indexing
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (process.env.BETA_NOINDEX === 'true') {
+    res.setHeader('X-Robots-Tag', 'noindex,nofollow,noarchive,nosnippet,noimageindex');
+  }
+  next();
+});
+
+// Optional Basic Auth for beta access
+const basicAuth = (req: Request, res: Response, next: NextFunction) => {
+  // Skip auth for specific routes if needed (health checks, etc.)
+  if (req.path === '/api/health') {
+    return next();
+  }
+
+  const auth = req.headers.authorization;
+  
+  if (!auth || !auth.startsWith('Basic ')) {
+    res.setHeader('WWW-Authenticate', 'Basic realm="DeelrzCRM Beta Access"');
+    return res.status(401).json({ message: 'Authentication required for beta access' });
+  }
+
+  const credentials = Buffer.from(auth.slice(6), 'base64').toString('utf-8');
+  const [username, password] = credentials.split(':');
+  
+  const validUser = process.env.BETA_USER || 'beta';
+  const validPass = process.env.BETA_PASS || 'access';
+
+  if (username !== validUser || password !== validPass) {
+    res.setHeader('WWW-Authenticate', 'Basic realm="DeelrzCRM Beta Access"');
+    return res.status(401).json({ message: 'Invalid credentials' });
+  }
+
+  next();
+};
+
+// Apply basic auth if enabled
+if (process.env.BETA_BASIC_AUTH === '1' || process.env.BETA_BASIC_AUTH === 'true') {
+  app.use(basicAuth);
+  log('Beta basic auth enabled');
+}
+
 // Body parsing with size limits
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false, limit: '1mb' }));
