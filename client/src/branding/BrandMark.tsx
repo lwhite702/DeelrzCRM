@@ -80,7 +80,7 @@ export function BrandMark({
 
   return (
     <div 
-      className={cn("flex flex-col items-start", className)}
+      className={cn("flex flex-col items-center", className)}
       onClick={onClick}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
