@@ -1,0 +1,438 @@
+-- 000_kb_consolidated_migration_and_seed.sql
+-- One-shot, idempotent migration that (1) creates/evolves tables,
+-- (2) seeds canonical categories, (3) seeds 12 KB articles (one per category),
+-- and (4) creates a helper view. No auth schema dependency.
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- OPTIONAL: uncomment if you want to wipe and recreate from scratch
+-- DROP VIEW IF EXISTS public.kb_articles_with_category CASCADE;
+-- DROP TABLE IF EXISTS public.kb_feedback CASCADE;
+-- DROP TABLE IF EXISTS public.kb_articles CASCADE;
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- 1) Categories
+CREATE TABLE IF NOT EXISTS public.kb_categories (
+  id         uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  key        text NOT NULL UNIQUE,
+  name       text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO public.kb_categories (key, name) VALUES
+  ('onboarding','Onboarding'),
+  ('troubleshooting','Troubleshooting'),
+  ('api','API & Integrations'),
+  ('features','Features & Modules'),
+  ('inventory','Inventory'),
+  ('sales','Sales / POS'),
+  ('customers','Customers & Loyalty'),
+  ('credit','Credit'),
+  ('delivery','Delivery'),
+  ('dashboard','Dashboard'),
+  ('billing','Billing & Subscription'),
+  ('admin','Administration')
+ON CONFLICT (key) DO UPDATE SET name = EXCLUDED.name;
+
+-- 2) Articles (create/evolve)
+CREATE TABLE IF NOT EXISTS public.kb_articles (
+  id          uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  tenant_id   uuid NULL,
+  title       text NOT NULL,
+  slug        text NOT NULL,
+  category    text,
+  category_id uuid NULL,
+  content_md  text NOT NULL,
+  created_by  bigint NOT NULL DEFAULT 45450370,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- Ensure unique slug
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.kb_articles'::regclass
+      AND contype = 'u'
+      AND conname = 'kb_articles_slug_key'
+  ) THEN
+    ALTER TABLE public.kb_articles
+      ADD CONSTRAINT kb_articles_slug_key UNIQUE (slug);
+  END IF;
+END$$;
+
+-- Normalize important columns to TEXT (handles varchar/int legacy)
+ALTER TABLE public.kb_articles
+  ALTER COLUMN title      TYPE text USING title::text,
+  ALTER COLUMN slug       TYPE text USING slug::text,
+  ALTER COLUMN category   TYPE text USING category::text,
+  ALTER COLUMN content_md TYPE text USING content_md::text;
+
+-- FK: category_id -> kb_categories
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'kb_articles_category_id_fkey'
+      AND conrelid = 'public.kb_articles'::regclass
+  ) THEN
+    ALTER TABLE public.kb_articles
+      ADD CONSTRAINT kb_articles_category_id_fkey
+      FOREIGN KEY (category_id)
+      REFERENCES public.kb_categories(id)
+      ON DELETE SET NULL;
+  END IF;
+END$$;
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_kb_articles_tenant_slug ON public.kb_articles(tenant_id, slug);
+CREATE INDEX IF NOT EXISTS idx_kb_articles_category_id ON public.kb_articles(category_id);
+
+-- 3) Feedback (create/evolve)
+CREATE TABLE IF NOT EXISTS public.kb_feedback (
+  id          uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  article_id  uuid NOT NULL REFERENCES public.kb_articles(id) ON DELETE CASCADE,
+  tenant_id   uuid NULL,
+  user_ref    text NULL,
+  rating      smallint NOT NULL CHECK (rating IN (-1, 1)),
+  comment     text,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_kb_feedback_article_id ON public.kb_feedback(article_id);
+CREATE INDEX IF NOT EXISTS idx_kb_feedback_tenant_id  ON public.kb_feedback(tenant_id);
+
+-- 4) Seed 12 articles (one per category) — upsert by slug, link category_id, set created_by = 45450370
+
+-- A) Onboarding
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='onboarding')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'Getting Started with DeelrzCRM',
+  'getting-started-guide',
+  'onboarding',
+  (SELECT id FROM cat),
+  $MD$
+# Getting Started with DeelrzCRM
+
+Welcome to DeelrzCRM! 🎉
+
+1. Go to **/login** (invite required in beta).
+2. If you belong to multiple orgs, pick your **tenant**.
+3. The **Dashboard** shows KPIs, alerts, and module links.
+4. Use the sidebar for **Inventory, Sales, Customers, Delivery, Loyalty, Credit, Settings**.
+
+> Tip: Press **F1** (or **Ctrl+?**) for Help at any time.
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category, category_id=EXCLUDED.category_id,
+  content_md=EXCLUDED.content_md, created_by=EXCLUDED.created_by;
+
+-- B) Troubleshooting
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='troubleshooting')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'Common Technical Issues and Solutions',
+  'troubleshooting-guide',
+  'troubleshooting',
+  (SELECT id FROM cat),
+  $MD$
+# Common Technical Issues & Solutions
+
+**Login issues**
+- Verify invite email and tenant selection.
+- Clear cookies or try an incognito window.
+
+**Stripe payment fails**
+- Check test vs live mode, total > $0, supported currency.
+
+**Delivery estimate seems off**
+- Verify addresses/coordinates (lat −90..90, lon −180..180).
+
+Use **Settings → Help** to contact support.
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category, category_id=EXCLUDED.category_id,
+  content_md=EXCLUDED.content_md, created_by=EXCLUDED.created_by;
+
+-- C) API
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='api')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'API Documentation & Integration Guide',
+  'api-integration-guide',
+  'api',
+  (SELECT id FROM cat),
+  $MD$
+# API & Integration Guide
+
+Secure tenant-scoped endpoints:
+
+- **Auth**: bearer tokens (tenant-scoped).
+- **Inventory**: batches, adjustments.
+- **Sales**: orders, confirmations, receipts.
+- **Delivery**: fee estimate & confirmations.
+- **Webhooks**: Stripe payment updates.
+
+Get keys in **Settings → Developer**. Rotate regularly.
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category, category_id=EXCLUDED.category_id,
+  content_md=EXCLUDED.content_md, created_by=EXCLUDED.created_by;
+
+-- D) Features & Modules
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='features')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'Features & Modules Overview',
+  'features-overview',
+  'features',
+  (SELECT id FROM cat),
+  $MD$
+# Features & Modules Overview
+
+Enable or disable modules as needed: Inventory, Sales/POS, Customers, Loyalty, Credit, Delivery, Dashboard, Administration.
+
+**Feature Flags**
+- Control visibility per tenant
+- Roll out gradually
+- Temporarily disable modules for maintenance
+
+Use **Settings → Modules** to manage modules.
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category, category_id=EXCLUDED.category_id,
+  content_md=EXCLUDED.content_md, created_by=EXCLUDED.created_by;
+
+-- E) Inventory
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='inventory')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'Managing Your Inventory',
+  'inventory-management-guide',
+  'inventory',
+  (SELECT id FROM cat),
+  $MD$
+# Managing Your Inventory
+
+Lot/batch tracking with **FIFO** and **WAC**.
+
+- **Add Batch**: product, supplier, qty/weight, unit cost, date
+- **Adjustments**: samples, waste, corrections (audited)
+- **Restock Alerts**: forecasting prevents stockouts
+
+Use consistent product names for clean reporting.
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category, category_id=EXCLUDED.category_id,
+  content_md=EXCLUDED.content_md, created_by=EXCLUDED.created_by;
+
+-- F) Sales / POS
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='sales')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'Sales Point of Sale (POS) System',
+  'sales-pos-system',
+  'sales',
+  (SELECT id FROM cat),
+  $MD$
+# Sales POS
+
+Create orders, accept payments, and issue receipts.
+
+1. Add items to cart
+2. Choose payment: **Cash**, **Card (Stripe)**, or **Credit**
+3. Confirm sale → FIFO deduction + loyalty update
+4. Download/print receipt
+
+*Tip:* **Tender → Quantity** suggests quantity for a given amount paid.
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category, category_id=EXCLUDED.category_id,
+  content_md=EXCLUDED.content_md, created_by=EXCLUDED.created_by;
+
+-- G) Customers & Loyalty
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='customers')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'Customer Management & Loyalty Programs',
+  'customer-management',
+  'customers',
+  (SELECT id FROM cat),
+  $MD$
+# Customer Management & Loyalty
+
+Profiles include contact info, preferences, history, loyalty points, credit status.
+
+**Loyalty Tiers**
+- Bronze, Silver, Gold, Platinum
+- Points accrue on paid orders; redeemable at checkout
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category, category_id=EXCLUDED.category_id,
+  content_md=EXCLUDED.content_md, created_by=EXCLUDED.created_by;
+
+-- H) Credit
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='credit')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'Credit Overview',
+  'credit-overview',
+  'credit',
+  (SELECT id FROM cat),
+  $MD$
+# Credit Overview
+
+Built-in credit for trusted customers.
+
+**Key features**
+- Tenant-defined limits
+- Eligibility checks at checkout
+- Balance tracking and suspension when overdue
+
+**Workflow**
+1) Enable in **Settings → Credit**
+2) Assign customer limit
+3) Checkout with **Credit**
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category, category_id=EXCLUDED.category_id,
+  content_md=EXCLUDED.content_md, created_by=EXCLUDED.created_by;
+
+-- I) Delivery
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='delivery')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'Delivery Overview',
+  'delivery-overview',
+  'delivery',
+  (SELECT id FROM cat),
+  $MD$
+# Delivery Overview
+
+Manage pickup or manual delivery.
+
+**Workflow**
+1) Enable in **Settings → Delivery**
+2) Add delivery addresses
+3) Choose **Delivery** during sale
+4) Track status: Requested → Out → Completed
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category, category_id=EXCLUDED.category_id,
+  content_md=EXCLUDED.content_md, created_by=EXCLUDED.created_by;
+
+-- J) Dashboard
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='dashboard')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'Dashboard Overview',
+  'dashboard-overview',
+  'dashboard',
+  (SELECT id FROM cat),
+  $MD$
+# Dashboard Overview
+
+KPIs, alerts, credit exposure, recent activity.
+
+**Customize**
+- Toggle widgets (Settings → Dashboard)
+- Filter by date range, groups, categories
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category, category_id=EXCLUDED.category_id,
+  content_md=EXCLUDED.content_md, created_by=EXCLUDED.created_by;
+
+-- K) Billing
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='billing')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'Billing & Payment Information',
+  'billing-payment-info',
+  'billing',
+  (SELECT id FROM cat),
+  $MD$
+# Billing & Payment Information
+
+Manage subscription in **Settings → Billing**.
+
+**POS Payments**
+- Cash (record amount/notes)
+- Card (Stripe PaymentIntent)
+- Credit (eligible customers)
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category, category_id=EXCLUDED.category_id,
+  content_md=EXCLUDED.content_md, created_by=EXCLUDED.created_by;
+
+-- L) Administration
+WITH cat AS (SELECT id FROM public.kb_categories WHERE key='admin')
+INSERT INTO public.kb_articles (tenant_id,title,slug,category,category_id,content_md,created_by)
+VALUES (
+  NULL,
+  'Administration Overview',
+  'admin-overview',
+  'admin',
+  (SELECT id FROM cat),
+  $MD$
+# Administration Overview
+
+Tenant & user management, roles, feature flags, branding, audit logs.
+
+Restricted to **Admin/Super Admin**.
+$MD$,
+  45450370
+)
+ON CONFLICT (slug) DO UPDATE SET
+  title=EXCLUDED.title, category=EXCLUDED.category, category_id=EXCLUDED.category_id,
+  content_md=EXCLUDED.content_md, created_by=EXCLUDED.created_by;
+
+-- 5) Helper view (explicit TEXT casts prevent COALESCE errors)
+DROP VIEW IF EXISTS public.kb_articles_with_category;
+CREATE OR REPLACE VIEW public.kb_articles_with_category AS
+SELECT
+  a.id,
+  a.tenant_id,
+  a.title,
+  a.slug,
+  COALESCE(c.name::text, a.category::text) AS category_name,
+  c.key::text                              AS category_key,
+  a.content_md,
+  a.created_by,
+  a.created_at
+FROM public.kb_articles a
+LEFT JOIN public.kb_categories c ON c.id = a.category_id;
