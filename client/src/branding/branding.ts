@@ -4,8 +4,8 @@ export const BRAND = {
   colors: {
     primary: "#4DA6FF", // Cloud Blue
     secondary: "#75BDEB", // Sky Gradient  
-    background: "#FFFFFF", // White
-    backgroundAlt: "#F9F9F9", // Light Gray
+    background: "#F5F0EA", // Warm Beige (matches logo background)
+    backgroundAlt: "#FEFCFA", // Light Cream
     text: "#333333" // Dark Gray
   },
   assets: {
