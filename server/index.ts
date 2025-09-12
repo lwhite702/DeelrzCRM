@@ -3,6 +3,8 @@ import helmet from "helmet";
 import compression from "compression";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
+import morgan from "morgan";
+import { nanoid } from "nanoid";
 import path from "path";
 import fs from "fs";
 import { registerRoutes } from "./routes";
@@ -13,10 +15,22 @@ const app = express();
 // Trust proxy for accurate client IPs
 app.set('trust proxy', 1);
 
-// Security middleware - configured for development compatibility
+// Security middleware - split dev vs prod CSP
 const isProduction = process.env.NODE_ENV === 'production';
 app.use(helmet({
-  contentSecurityPolicy: isProduction ? undefined : {
+  contentSecurityPolicy: isProduction ? {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "https://js.stripe.com"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      connectSrc: ["'self'", "https:"],
+      imgSrc: ["'self'", "data:", "https:"],
+      fontSrc: ["'self'", "https:"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["https://js.stripe.com"]
+    }
+  } : {
     directives: {
       defaultSrc: ["'self'"],
       scriptSrc: [
@@ -124,6 +138,31 @@ const limiter = rateLimit({
 
 app.use(limiter);
 
+// Stricter rate limiting for auth routes
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 50, // Limit auth routes to 50 requests per windowMs
+  message: {
+    error: 'Too many authentication attempts from this IP, please try again later.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use('/api/auth', authLimiter);
+
+// Request ID middleware
+app.use((req: any, res: Response, next: NextFunction) => {
+  req.requestId = nanoid();
+  res.setHeader('X-Request-ID', req.requestId);
+  next();
+});
+
+// Morgan logging for development
+if (!isProduction) {
+  app.use(morgan('dev'));
+}
+
 // Beta Security Middleware
 // Robot blocking headers - applied globally to prevent indexing
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -132,6 +171,14 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   }
   next();
 });
+
+// Robots.txt route when BETA_NOINDEX is enabled
+if (process.env.BETA_NOINDEX === 'true') {
+  app.get('/robots.txt', (req: Request, res: Response) => {
+    res.type('text/plain');
+    res.send('User-agent: *\nDisallow: /');
+  });
+}
 
 // Optional Basic Auth for beta access
 const basicAuth = (req: Request, res: Response, next: NextFunction) => {
@@ -204,12 +251,24 @@ app.use((req, res, next) => {
 (async () => {
   const server = await registerRoutes(app);
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  // Global error handler with request IDs
+  app.use((err: any, req: any, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
+    const requestId = req.requestId || 'unknown';
 
-    res.status(status).json({ message });
-    throw err;
+    // Log error with request ID
+    console.error(`[${requestId}] Error ${status}:`, err.message, err.stack);
+
+    res.status(status).json({ 
+      message,
+      requestId: requestId
+    });
+    
+    // Don't rethrow in production to prevent crash
+    if (!isProduction) {
+      throw err;
+    }
   });
 
   // importantly only setup vite in development and after

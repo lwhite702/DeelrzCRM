@@ -24,6 +24,7 @@ import {
   insertUserSettingsSchema,
   batches,
   products,
+  payments,
   webhookEvents,
 } from "@shared/schema";
 import { db } from "./db";
@@ -440,24 +441,71 @@ export async function registerRoutes(app: Express): Promise<Server> {
   tenantRouter.post("/delivery/estimate", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
-      const { pickupLat, pickupLon, dropoffLat, dropoffLon } = req.body;
       
-      // Simplified distance calculation (would use proper geocoding service)
-      const distance = Math.sqrt(
-        Math.pow(dropoffLat - pickupLat, 2) + Math.pow(dropoffLon - pickupLon, 2)
-      ) * 69; // rough miles conversion
+      // Strict Zod validation
+      const deliveryEstimateSchema = z.object({
+        pickupLat: z.number(),
+        pickupLon: z.number(),
+        dropoffLat: z.number(),
+        dropoffLon: z.number(),
+        priority: z.enum(["standard", "rush"]).optional().default("standard"),
+      }).strict();
+
+      const validatedInput = deliveryEstimateSchema.parse(req.body);
+      const { pickupLat, pickupLon, dropoffLat, dropoffLon, priority } = validatedInput;
       
-      const baseFee = 5.00;
-      const perMileFee = 1.50;
-      const estimatedFee = baseFee + (distance * perMileFee);
-      const estimatedTime = Math.max(15, distance * 3); // 3 minutes per mile, min 15
+      // Clamp lat/lon ranges
+      if (pickupLat < -90 || pickupLat > 90 || dropoffLat < -90 || dropoffLat > 90) {
+        return res.status(400).json({ message: "Invalid latitude: must be between -90 and 90" });
+      }
+      if (pickupLon < -180 || pickupLon > 180 || dropoffLon < -180 || dropoffLon > 180) {
+        return res.status(400).json({ message: "Invalid longitude: must be between -180 and 180" });
+      }
+      
+      // Proper haversine formula for distance calculation
+      const toRadians = (degrees: number) => degrees * (Math.PI / 180);
+      const earthRadiusMiles = 3959;
+      
+      const lat1Rad = toRadians(pickupLat);
+      const lat2Rad = toRadians(dropoffLat);
+      const deltaLatRad = toRadians(dropoffLat - pickupLat);
+      const deltaLonRad = toRadians(dropoffLon - pickupLon);
+      
+      const a = Math.sin(deltaLatRad / 2) * Math.sin(deltaLatRad / 2) +
+                Math.cos(lat1Rad) * Math.cos(lat2Rad) *
+                Math.sin(deltaLonRad / 2) * Math.sin(deltaLonRad / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      const distance = earthRadiusMiles * c;
+      
+      // Fee calculation: base=5.0, perMile=1.5, perMin=0.25, minFee=7.0
+      const baseFee = 5.0;
+      const perMileFee = 1.5;
+      const perMinFee = 0.25;
+      const minFee = 7.0;
+      
+      const estimatedMinutes = Math.max(15, Math.round(distance * 3)); // 3 minutes per mile, min 15
+      let fee = baseFee + (distance * perMileFee) + (estimatedMinutes * perMinFee);
+      
+      // Apply minimum fee
+      fee = Math.max(fee, minFee);
+      
+      // Rush adds +30%
+      if (priority === "rush") {
+        fee *= 1.3;
+      }
 
       res.json({
-        distance: distance.toFixed(2),
-        fee: estimatedFee.toFixed(2),
-        estimatedMinutes: Math.round(estimatedTime),
+        distance: `${distance.toFixed(1)} mi`,
+        estimatedMinutes: estimatedMinutes,
+        fee: fee.toFixed(2),
       });
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Invalid request data", 
+          errors: error.errors 
+        });
+      }
       console.error("Error estimating delivery fee:", error);
       res.status(500).json({ message: "Failed to estimate delivery fee" });
     }
@@ -691,8 +739,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   tenantRouter.get("/payments", async (req: any, res) => {
     try {
       const { tenantId } = req.params;
-      const payments = await storage.getPayments(tenantId);
-      res.json(payments);
+      const paymentsData = await storage.getPayments(tenantId);
+      res.json(paymentsData);
     } catch (error) {
       console.error("Error fetching payments:", error);
       res.status(500).json({ message: "Failed to fetch payments" });
@@ -896,8 +944,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { paymentIntentId, paymentId } = confirmPaymentSchema.parse(req.body);
 
       // Find the payment record
-      const payments = await storage.getPayments(tenantId);
-      const payment = payments.find(p => p.id === paymentId && p.paymentIntentId === paymentIntentId);
+      const paymentsData = await storage.getPayments(tenantId);
+      const payment = paymentsData.find(p => p.id === paymentId && p.paymentIntentId === paymentIntentId);
 
       if (!payment) {
         return res.status(404).json({ message: "Payment not found" });
@@ -911,30 +959,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Fetch PaymentIntent from Stripe to get current status
       const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
 
-      // Update payment status based on Stripe status
-      let updateData: any = {
-        status: "pending", // default
-      };
+      // Use transaction for payment status update
+      const updatedPayment = await db.transaction(async (tx) => {
+        // Update payment status based on Stripe status
+        let updateData: any = {
+          status: "pending", // default
+        };
 
-      if (paymentIntent.status === "succeeded") {
-        updateData.status = "completed";
-        // Get charge ID from the latest charge
-        if (paymentIntent.latest_charge) {
-          updateData.chargeId = typeof paymentIntent.latest_charge === 'string' 
-            ? paymentIntent.latest_charge 
-            : paymentIntent.latest_charge.id;
+        if (paymentIntent.status === "succeeded") {
+          updateData.status = "completed";
+          // Get charge ID from the latest charge
+          if (paymentIntent.latest_charge) {
+            updateData.chargeId = typeof paymentIntent.latest_charge === 'string' 
+              ? paymentIntent.latest_charge 
+              : paymentIntent.latest_charge.id;
+          }
+        } else if (paymentIntent.status === "requires_payment_method" || paymentIntent.status === "canceled") {
+          updateData.status = "failed";
+          updateData.failureReason = paymentIntent.last_payment_error?.message || "Payment failed";
         }
-      } else if (paymentIntent.status === "requires_payment_method" || paymentIntent.status === "canceled") {
-        updateData.status = "failed";
-        updateData.failureReason = paymentIntent.last_payment_error?.message || "Payment failed";
-      }
 
-      const updatedPayment = await storage.updatePaymentStatus(
-        payment.id, 
-        tenantId, 
-        updateData.status, 
-        updateData
-      );
+        // Update payment status atomically
+        const [updatedPayment] = await tx
+          .update(payments)
+          .set({ 
+            status: updateData.status as "pending" | "completed" | "failed" | "refunded",
+            metadata: updateData || null,
+            updatedAt: new Date() 
+          })
+          .where(and(eq(payments.id, payment.id), eq(payments.tenantId, tenantId)))
+          .returning();
+          
+        return updatedPayment;
+      });
 
       res.json(updatedPayment);
     } catch (error: any) {
@@ -970,8 +1027,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Find the payment record
-      const payments = await storage.getPayments(tenantId);
-      const payment = payments.find(p => p.id === paymentId);
+      const paymentsData = await storage.getPayments(tenantId);
+      const payment = paymentsData.find(p => p.id === paymentId);
 
       if (!payment) {
         return res.status(404).json({ message: "Payment not found" });
@@ -1075,8 +1132,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             
             if (tenantId) {
               // Find payment by paymentIntentId
-              const payments = await storage.getPayments(tenantId);
-              const payment = payments.find(p => p.paymentIntentId === paymentIntent.id);
+              const paymentsData = await storage.getPayments(tenantId);
+              const payment = paymentsData.find(p => p.paymentIntentId === paymentIntent.id);
               
               if (payment) {
                 const updateData: any = {
@@ -1762,7 +1819,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ message: "Knowledge base articles seeded successfully" });
     } catch (error) {
       console.error("Error seeding KB articles:", error);
-      res.status(500).json({ message: "Failed to seed knowledge base articles", error: error.message });
+      res.status(500).json({ message: "Failed to seed knowledge base articles", error: (error as Error).message });
     }
   });
 

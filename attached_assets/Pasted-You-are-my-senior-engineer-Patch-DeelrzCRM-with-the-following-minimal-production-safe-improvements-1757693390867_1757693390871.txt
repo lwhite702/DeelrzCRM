@@ -1,0 +1,93 @@
+You are my senior engineer. Patch DeelrzCRM with the following minimal, production-safe improvements. Keep changes small, typed, and covered by Zod validation. Do not change public API shapes except where noted.
+
+================================
+A) Rate limiting + error handler
+================================
+File: server/index.ts
+- Add a global express-rate-limit middleware:
+  const limiter = rateLimit({ windowMs: 15*60*1000, max: 100, standardHeaders: true, legacyHeaders: false });
+  app.use(limiter);
+- Add a stricter limiter on /api/auth/* if such routes exist (50/15min).
+- Add a global error handler at bottom:
+  app.use((err, req, res, next) => {
+    const id = (req as any).reqId ?? 'r-' + Date.now();
+    const status = err.status || 500;
+    if (app.get('env') !== 'development') console.error(`[${id}]`, err.message);
+    res.status(status).json({ error: status >= 500 ? 'Internal Server Error' : err.message, requestId: id });
+  });
+- Add a lightweight request id on each request (nanoid) via middleware: (req as any).reqId.
+
+================================
+B) Robots.txt + noindex headers
+================================
+File: server/index.ts
+- If process.env.BETA_NOINDEX === 'true', ensure:
+  1) Existing X-Robots-Tag header stays set: "noindex,nofollow,noarchive,nosnippet,noimageindex"
+  2) Add GET /robots.txt route returning:
+     User-agent: *
+     Disallow: /
+- Ensure this is served in dev/prod when BETA_NOINDEX is true.
+
+================================
+C) Delivery estimator hardening
+================================
+File: server/routes.ts
+- For POST /tenants/:tenantId/delivery/estimate:
+  1) Wrap input with Zod.strict(): { pickupLat: number, pickupLon: number, dropoffLat: number, dropoffLon: number, priority?: "standard"|"rush" }
+  2) Clamp ranges: lat [-90, 90], lon [-180, 180]; return 400 on invalid.
+  3) If any coord is missing/NaN, return 400 with message.
+  4) Keep fee calc minimal but deterministic:
+     - distanceMiles = haversine(pickup, dropoff)
+     - minutes = Math.max(5, (distanceMiles/20)*60)
+     - base = 5.0, perMile = 1.5, perMin = 0.25, minFee = 7.0; rush adds +30%
+     - fee = max(minFee, base + perMile*distance + perMin*minutes)
+  5) Return { distance: "X.Y mi", estimatedMinutes: integer, fee: "NN.NN" }
+- Add unit tests for invalid coords and a happy path.
+
+================================
+D) Stripe confirm idempotency
+================================
+File: server/routes.ts
+- In POST /tenants/:tenantId/confirm-payment:
+  1) Zod.strict() body: { paymentIntentId: string, paymentId: string }
+  2) Load matching payment by id; if status in ("succeeded","failed"), return 200 with existing row (idempotent).
+  3) Fetch PaymentIntent from Stripe and map to final status.
+  4) Update row in a transaction; return updated row.
+- (If a webhook exists elsewhere) include a short-circuit if it already finalized the row.
+
+================================
+E) CSP: split dev vs prod
+================================
+File: server/index.ts
+- Keep current relaxed CSP for dev; for production restrict:
+  default-src 'self';
+  script-src 'self' https://js.stripe.com;
+  style-src 'self' 'unsafe-inline';
+  connect-src 'self' https: ws: wss:;
+  img-src 'self' data: https:;
+  frame-src https://js.stripe.com;
+- Drive via NODE_ENV === "production".
+
+================================
+F) Logging + sessions (touch-ups)
+================================
+- Add minimal request log in dev (morgan('dev')); suppress in prod.
+- Verify session cookie options: httpOnly: true, secure: NODE_ENV==='production', sameSite: 'lax', rolling idle timeout.
+
+================================
+G) Acceptance
+================================
+- Add tests (or a small script) that call:
+  1) /robots.txt when BETA_NOINDEX=true (expect Disallow: /)
+  2) delivery/estimate with invalid coord (400) and valid coord (200)
+  3) confirm-payment idempotency (finalized row returned when called twice)
+- Run `pnpm check && pnpm build && pnpm start` to ensure the app boots.
+- Output a short report of files changed.
+
+Proceed now with minimal diffs and clear commit messages:
+- feat(security): add rate limit + error handler
+- feat(robots): serve robots.txt on beta noindex
+- feat(delivery): strict validation + haversine + rush surcharge
+- fix(payments): confirm idempotency
+- chore(csp): tighten prod CSP
+- chore(devx): dev logger + session options
