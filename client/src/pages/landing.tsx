@@ -12,13 +12,12 @@ export default function Landing() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/10 to-accent/20 px-4">
       <div className="max-w-md w-full space-y-8">
         <div className="text-center">
-          <div className="mx-auto">
-            <BrandMark 
-              variant="logo" 
-              size="lg" 
-              showTagline={true}
-              className="mx-auto"
-              theme="auto"
+          <div className="mx-auto mb-8">
+            <img 
+              src="/branding/deelzrxcrm-logo-main.png" 
+              alt="DeelrzCRM - High Business. High Quality CRM. Powered by Clouds" 
+              className="mx-auto max-w-md w-full h-auto"
+              data-testid="logo-main"
             />
           </div>
         </div>
