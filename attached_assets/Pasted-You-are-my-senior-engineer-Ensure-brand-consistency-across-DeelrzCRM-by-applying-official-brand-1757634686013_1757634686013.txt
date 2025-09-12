@@ -1,0 +1,104 @@
+You are my senior engineer. Ensure **brand consistency** across DeelrzCRM by applying official branding, replacing old logos, and enforcing guidelines with automated guards.
+
+====================
+BRANDING GUIDELINES
+====================
+1. Logo Usage
+- Always use the official DeelrzCRM logo file in headers, login screens, splash/loading pages, invoices, and email templates.
+- Place logo top-left in dashboards, mobile nav, and sidebar.
+- Do not distort or recolor. Approved versions:
+  • Light mode: /public/branding/deelzrxcrm-logo-light.svg
+  • Dark mode: /public/branding/deelzrxcrm-logo-dark.svg
+- Tagline: “High Business. High Quality CRM. Powered by Clouds” displayed on login and marketing pages.
+
+2. Colors
+- Primary: Cloud Blue #4DA6FF
+- Secondary: Sky Gradient (#75BDEB)
+- Backgrounds: White (#FFFFFF) or Light Gray (#F9F9F9)
+- Text: Dark Gray (#333)
+
+3. Typography
+- Font: Inter (preferred) or Roboto/Nunito fallback
+- Headings: Bold, title case
+- Body: Regular, sentence case
+
+4. UI Consistency
+- Buttons, forms, tooltips styled with primary/secondary palette
+- Tooltips/help overlays may include brand watermark
+- Emails: logo in header, tagline in footer
+- Invoices/PDFs: include logo, consistent colors
+
+5. Favicon/App Icons
+- Use simplified cloud mark derived from logo
+- Place at /public/branding/favicon.* in multiple sizes
+
+====================
+TASKS: CODIFY & ENFORCE BRANDING
+====================
+1. CENTRALIZE BRANDING
+- Create /src/branding/branding.ts exporting:
+  const BRAND = {
+    name: "DeelrzCRM",
+    tagline: "High Business. High Quality CRM. Powered by Clouds",
+    colors: { primary, secondary, background, text },
+    assets: {
+      logoLight: "/branding/deelzrxcrm-logo-light.svg",
+      logoDark: "/branding/deelzrxcrm-logo-dark.svg",
+      favicon: "/branding/favicon.svg"
+    }
+  };
+
+2. BRANDMARK COMPONENT
+- Create /src/branding/BrandMark.tsx:
+  <picture>
+    <img className="block dark:hidden" src={BRAND.assets.logoLight} alt="DeelrzCRM logo" />
+    <img className="hidden dark:block" src={BRAND.assets.logoDark} alt="DeelrzCRM logo dark" />
+  </picture>
+- Prop: showTagline (default false) to render tagline under logo
+- Tailwind dark mode must be enabled in tailwind.config.js (darkMode: "class")
+
+3. CODEMOD REPLACEMENT
+- Add script: scripts/replace-logo-with-brandmark.mjs
+- Find JSX <img> src containing ["logo","deelz","rxcrm","branding/"] (png/svg)
+- Replace with:
+  import { BrandMark } from "@/branding/BrandMark";
+  <BrandMark className="h-8 w-auto" />
+- Preserve className if present; dedupe imports
+- Skip src/email/** and src/pdf/** (keep raw <img> there)
+
+4. MANUAL TARGETS
+- src/layouts/AppHeader.tsx: replace logo with <BrandMark />
+- src/pages/login.tsx: show <BrandMark showTagline /> centered
+- src/components/Sidebar.tsx: use <BrandMark className="h-7" />
+- src/components/Splash.tsx: center full-screen <BrandMark />
+- Invoices/PDF: use BRAND.assets.logoLight constant
+- Emails: use /branding/deelzrxcrm-logo-light.svg explicitly
+
+5. LINT & CI GUARD
+- Add ESLint rule to disallow raw logo imports outside email/pdf.
+- Add CI check: no <img src=...logo> in src/** except allowed paths.
+- Scripts:
+  "codemod:logo": "node scripts/replace-logo-with-brandmark.mjs"
+  "brand:guard": "node scripts/brand-guard.mjs"
+
+====================
+ACCEPTANCE CRITERIA
+====================
+- All UI uses <BrandMark /> (auto light/dark).
+- Emails/PDFs explicitly reference BRAND.assets.logoLight.
+- Header, Login, Sidebar, Splash use correct logo/tagline.
+- Favicon and app icons updated.
+- ESLint and CI prevent raw logo usage in future.
+- README updated with brand usage guidelines.
+
+====================
+EXECUTION
+====================
+1. Implement BRAND config, BrandMark component, and codemod.
+2. Run codemod dry, then full, commit changes.
+3. Apply manual edits to key files.
+4. Add lint rules and CI guard.
+5. Verify build, light/dark mode toggle, and email/PDF rendering.
+6. Update README branding section with usage examples.
+
+Proceed now.

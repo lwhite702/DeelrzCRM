@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useTenant } from "@/contexts/tenant-context";
 import { HelpOverlay } from "@/components/help/help-overlay";
 import { HelpCircle } from "lucide-react";
+import { BrandMark } from "@/branding/BrandMark";
 
 interface HeaderProps {
   onMobileMenuToggle: () => void;
@@ -54,12 +55,15 @@ export default function Header({ onMobileMenuToggle, tenantName }: HeaderProps) 
               <i className="fas fa-bars text-xl"></i>
             </Button>
             <div className="flex items-center space-x-3 ml-2 lg:ml-0">
-              <div className="h-8 w-8 bg-primary rounded-lg flex items-center justify-center">
-                <i className="fas fa-pills text-primary-foreground text-sm"></i>
-              </div>
+              <BrandMark 
+                variant="icon" 
+                size="sm" 
+                theme="auto"
+                data-testid="brand-icon"
+              />
               <div className="hidden sm:block">
                 <h1 className="text-lg font-semibold text-foreground" data-testid="text-tenant-name">
-                  {tenantName || "PharmaCare SaaS"}
+                  {tenantName || "DeelrzCRM"}
                 </h1>
               </div>
             </div>

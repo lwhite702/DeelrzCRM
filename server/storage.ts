@@ -1306,11 +1306,11 @@ export class DatabaseStorage implements IStorage {
     const adminUserId = adminUsers[0].id;
     const sampleArticles = [
       {
-        title: "Getting Started with PharmaCare SaaS",
+        title: "Getting Started with DeelrzCRM",
         slug: "getting-started-guide",
-        contentMd: `# Getting Started with PharmaCare SaaS
+        contentMd: `# Getting Started with DeelrzCRM
 
-Welcome to PharmaCare SaaS, your comprehensive pharmacy management solution! This guide will walk you through the essential features and help you get started quickly.
+Welcome to DeelrzCRM, your comprehensive business management solution! This guide will walk you through the essential features and help you get started quickly.
 
 ## Quick Setup
 
@@ -1361,7 +1361,7 @@ Your central hub for monitoring daily operations, revenue tracking, and importan
         slug: "inventory-management-guide",
         contentMd: `# Managing Your Inventory
 
-Effective inventory management is crucial for pharmacy operations. This guide covers all aspects of tracking medications and products in PharmaCare SaaS.
+Effective inventory management is crucial for business operations. This guide covers all aspects of tracking products and inventory in DeelrzCRM.
 
 ## Adding Products
 
@@ -1719,7 +1719,7 @@ This guide helps you resolve common technical issues quickly and efficiently.
 4. Try the basic troubleshooting steps above
 
 ### Contact Information
-- **Email**: support@pharmacare.com
+- **Email**: support@deelzrcrm.com
 - **Response Time**: Within 24 hours for most issues
 - **Emergency Support**: Available for critical system issues
 
@@ -1742,7 +1742,7 @@ This guide helps you resolve common technical issues quickly and efficiently.
         slug: "billing-payment-info",
         contentMd: `# Billing and Payment Information
 
-Understanding your PharmaCare SaaS billing, payment processing, and subscription management.
+Understanding your DeelrzCRM billing, payment processing, and subscription management.
 
 ## Subscription Plans
 
@@ -1872,7 +1872,7 @@ Understanding your PharmaCare SaaS billing, payment processing, and subscription
 ## Support and Account Management
 
 ### Billing Support
-- **Email**: billing@pharmacare.com
+- **Email**: billing@deelzrcrm.com
 - **Phone**: Available during business hours
 - **Response Time**: Within 24 hours
 
@@ -1894,7 +1894,7 @@ Understanding your PharmaCare SaaS billing, payment processing, and subscription
         slug: "api-integration-guide",
         contentMd: `# API Documentation and Integration Guide
 
-Learn how to integrate with PharmaCare SaaS APIs for custom workflows and external system connections.
+Learn how to integrate with DeelrzCRM APIs for custom workflows and external system connections.
 
 ## Getting Started with APIs
 
@@ -1914,7 +1914,7 @@ Content-Type: application/json
 
 ### Base URL
 \`\`\`
-https://api.pharmacare.com/v1
+https://api.deelzrcrm.com/v1
 \`\`\`
 
 ## Core Endpoints
@@ -2045,7 +2045,7 @@ Configure webhook URLs in your account settings to receive real-time notificatio
 import requests
 
 API_KEY = "your-api-key"
-BASE_URL = "https://api.pharmacare.com/v1"
+BASE_URL = "https://api.deelzrcrm.com/v1"
 
 headers = {
     "Authorization": f"Bearer {API_KEY}",

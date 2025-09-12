@@ -1,5 +1,7 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { BrandMark } from "@/branding/BrandMark";
+import { BRAND } from "@/branding/branding";
 
 export default function Landing() {
   const handleLogin = () => {
@@ -10,39 +12,43 @@ export default function Landing() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary/10 to-accent/20 px-4">
       <div className="max-w-md w-full space-y-8">
         <div className="text-center">
-          <div className="mx-auto h-16 w-16 bg-primary rounded-lg flex items-center justify-center">
-            <i className="fas fa-pills text-2xl text-primary-foreground"></i>
+          <div className="mx-auto">
+            <BrandMark 
+              variant="logo" 
+              size="lg" 
+              showTagline={true}
+              className="mx-auto"
+              theme="auto"
+            />
           </div>
-          <h2 className="mt-6 text-3xl font-bold text-foreground">PharmaCare SaaS</h2>
-          <p className="mt-2 text-sm text-muted-foreground">Multi-tenant pharmacy management platform</p>
         </div>
         
         <Card>
           <CardContent className="p-8">
             <div className="space-y-6">
               <div className="space-y-4">
-                <h3 className="text-lg font-medium text-foreground">Welcome to PharmaCare</h3>
+                <h3 className="text-lg font-medium text-foreground">Welcome to {BRAND.name}</h3>
                 <p className="text-sm text-muted-foreground">
-                  Comprehensive pharmacy management system with inventory tracking, 
+                  {BRAND.tagline}. Comprehensive business management system with inventory tracking, 
                   customer management, sales POS, and multi-tenant support.
                 </p>
               </div>
               
               <div className="space-y-3">
                 <div className="flex items-center text-sm text-muted-foreground">
-                  <i className="fas fa-check text-green-600 mr-3"></i>
-                  Inventory Management with FIFO & WAC
+                  <i className="fas fa-check text-primary mr-3"></i>
+                  Cloud-Powered Business Management
                 </div>
                 <div className="flex items-center text-sm text-muted-foreground">
-                  <i className="fas fa-check text-green-600 mr-3"></i>
-                  Point of Sale System
+                  <i className="fas fa-check text-primary mr-3"></i>
+                  Inventory & Customer Management
                 </div>
                 <div className="flex items-center text-sm text-muted-foreground">
-                  <i className="fas fa-check text-green-600 mr-3"></i>
-                  Customer & Loyalty Management
+                  <i className="fas fa-check text-primary mr-3"></i>
+                  Sales POS & Loyalty Programs
                 </div>
                 <div className="flex items-center text-sm text-muted-foreground">
-                  <i className="fas fa-check text-green-600 mr-3"></i>
+                  <i className="fas fa-check text-primary mr-3"></i>
                   Delivery & Payment Processing
                 </div>
               </div>

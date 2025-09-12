@@ -2,6 +2,7 @@ import { Link, useLocation } from "@/lib/router";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useFeatureFlags } from "@/hooks/use-feature-flags";
+import { BrandMark } from "@/branding/BrandMark";
 
 interface MobileSidebarProps {
   isOpen: boolean;
@@ -47,12 +48,13 @@ export default function MobileSidebar({ isOpen, onClose, tenantId }: MobileSideb
       />
       <nav className="fixed left-0 top-0 bottom-0 flex flex-col w-64 bg-card border-r border-border">
         <div className="flex items-center justify-between px-4 py-4 border-b border-border">
-          <div className="flex items-center space-x-3">
-            <div className="h-8 w-8 bg-primary rounded-lg flex items-center justify-center">
-              <i className="fas fa-pills text-primary-foreground text-sm"></i>
-            </div>
-            <h1 className="text-lg font-semibold text-foreground">PharmaCare</h1>
-          </div>
+          <BrandMark 
+            variant="icon" 
+            size="sm" 
+            showTagline={false}
+            theme="auto"
+            className="text-lg font-semibold text-foreground"
+          />
           <Button 
             variant="ghost" 
             size="sm"
