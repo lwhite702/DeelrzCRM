@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * DeelrzCRM Production-Safe Improvements Acceptance Tests
+ * DeelRxCRM Production-Safe Improvements Acceptance Tests
  * 
  * Tests the following production improvements:
  * 1. Robots.txt with BETA_NOINDEX
@@ -352,7 +352,7 @@ async function testBasicAuth() {
 
 // Main test runner
 async function runAllTests() {
-  console.log('🚀 Starting DeelrzCRM Production-Safe Improvements Acceptance Tests\n');
+  console.log('🚀 Starting DeelRxCRM Production-Safe Improvements Acceptance Tests\n');
   console.log(`Testing against: ${BASE_URL}`);
   console.log(`Verbose logging: ${VERBOSE}`);
   console.log('='.repeat(60));

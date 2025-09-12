@@ -1306,11 +1306,11 @@ export class DatabaseStorage implements IStorage {
     const adminUserId = adminUsers[0].id;
     const sampleArticles = [
       {
-        title: "Getting Started with DeelrzCRM",
+        title: "Getting Started with DeelRxCRM",
         slug: "getting-started-guide",
-        contentMd: `# Getting Started with DeelrzCRM
+        contentMd: `# Getting Started with DeelRxCRM
 
-Welcome to DeelrzCRM, your comprehensive business management solution! This guide will walk you through the essential features and help you get started quickly.
+Welcome to DeelRxCRM, your comprehensive business management solution! This guide will walk you through the essential features and help you get started quickly.
 
 ## Quick Setup
 
@@ -1361,7 +1361,7 @@ Your central hub for monitoring daily operations, revenue tracking, and importan
         slug: "inventory-management-guide",
         contentMd: `# Managing Your Inventory
 
-Effective inventory management is crucial for business operations. This guide covers all aspects of tracking products and inventory in DeelrzCRM.
+Effective inventory management is crucial for business operations. This guide covers all aspects of tracking products and inventory in DeelRxCRM.
 
 ## Adding Products
 
@@ -1742,7 +1742,7 @@ This guide helps you resolve common technical issues quickly and efficiently.
         slug: "billing-payment-info",
         contentMd: `# Billing and Payment Information
 
-Understanding your DeelrzCRM billing, payment processing, and subscription management.
+Understanding your DeelRxCRM billing, payment processing, and subscription management.
 
 ## Subscription Plans
 
@@ -1894,7 +1894,7 @@ Understanding your DeelrzCRM billing, payment processing, and subscription manag
         slug: "api-integration-guide",
         contentMd: `# API Documentation and Integration Guide
 
-Learn how to integrate with DeelrzCRM APIs for custom workflows and external system connections.
+Learn how to integrate with DeelRxCRM APIs for custom workflows and external system connections.
 
 ## Getting Started with APIs
 

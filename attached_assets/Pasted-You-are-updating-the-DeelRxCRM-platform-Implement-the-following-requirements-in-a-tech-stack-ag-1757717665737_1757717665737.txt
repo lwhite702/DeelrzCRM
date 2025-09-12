@@ -1,0 +1,169 @@
+You are updating the **DeelRxCRM** platform. Implement the following requirements in a tech-stack agnostic way so that the system can be applied regardless of language, database, or hosting. Focus on principles, architecture, and enforceable patterns. Do not assume a specific provider.
+
+## BRANDING
+- App name: **DeelRxCRM** (always one word, exact casing).
+- Logo: graffiti/urban style.
+- Tagline: “High Business. High Quality CRM. Powered by Clouds.”
+- Consistent street-smart, confident tone in all UI copy. Never mention illegal activity.
+- UI theming: graffiti/urban vibe, neon accents, dark base, but accessible and mobile-friendly.
+
+## CORE MODULES
+
+### Dashboard
+- Real-time KPIs: revenue, sales, inventory alerts, customer counts.
+- Multi-tenant aware: show data only for the logged-in tenant.
+- Configurable widgets via feature flags.
+
+### Inventory
+- Lot/batch tracking with FIFO and Weighted Average Cost (WAC).
+- Units default to grams (g), ounces (oz), tabs, pills (customizable).
+- Fields:
+  - Public Name (safe-facing)
+  - Encrypted Street Name (internal, encrypted)
+  - Cost per unit calculated automatically at restock.
+- Adjustments system: comps, waste, personal use, with full audit history.
+
+### Customers
+- Profiles: name, phone, address, preferred payment & delivery, notes.
+- Encrypt sensitive fields (names, usernames, addresses).
+- Loyalty and credit info embedded in profile.
+- Customer trends: purchase history, frequency, outstanding balances.
+
+### Sales / POS
+- Cart functionality with multiple items.
+- Smart tender-to-quantity calculator:
+  - Input amount paid → system suggests product/quantity while preserving margins.
+- Tiered pricing:
+  - Standard customers
+  - VIP customers
+  - Resellers (tiered discount pricing)
+- Sales recorded with tenant_id, encrypted sensitive fields, and audit logs.
+
+### Delivery
+- Options: Pickup or Drop-off.
+- Addresses encrypted and tenant-scoped.
+- Fee calculation:
+  - Manual entry or simple formula (flat minimum + per-mile + per-time).
+  - Feature flag for future external API integrations.
+- Delivery status lifecycle: requested → assigned → completed.
+
+### Loyalty
+- 4-tier rewards system (e.g., Bronze → Platinum).
+- Track points per purchase and redemption history.
+- Admin UI for managing rewards and thresholds.
+- Integrated into Sales module.
+
+### Credit
+- Strict eligibility rules:
+  - No new credit if outstanding balance > 0.
+  - No new credit if inventory below threshold.
+  - No new credit if tenant exposure exceeds defined % of total inventory value.
+- Dynamic credit limits:
+  - Increase after consecutive on-time repayments.
+  - Decrease or freeze after late/failed repayments.
+- Track balances, repayment history, and credit status in customer profile.
+
+### Payments
+- **Stripe Integration**
+  - Default: payments through central DeelRxCRM Stripe account.
+  - Extendable: Stripe Connect for tenant-level payout accounts.
+  - Full PaymentIntent workflow with idempotency guarantees.
+- **Custom Payment Option**
+  - Record offline payments (cash, check, other).
+  - Freeform notes/comments field (encrypted at rest).
+- Audit every payment event: actor, tenant_id, amount, timestamp, method.
+
+### Settings
+- Feature flags system per tenant and global.
+- Danger Zone controls (see below).
+- Tenant branding (logo, color accents).
+- Data retention & purge policies.
+
+### Help System
+- Searchable knowledge base with categories & markdown articles.
+- Tooltips across modules.
+- Guided onboarding tour with progress tracking.
+- Super Admin CRUD interface for knowledge base articles.
+- Secure image upload and tenant-scoped content.
+
+## ADVANCED FEATURES
+
+### Markets Content Encryption
+- Encrypt all sensitive business data:
+  - Customer names/usernames
+  - Product street names and pricing
+  - Delivery addresses
+  - Transaction notes
+- Use strong symmetric encryption (AES-256 or equivalent).
+- Tenant-scoped encryption keys: rotatable, revocable.
+- Never log plaintext.
+- Helper interfaces:
+  - encrypt(data, tenant_id)
+  - decrypt(ciphertext, tenant_id)
+
+### Self-Destructible Content
+- Tenants can mark any content as self-destructible.
+- Armed content hides from UI immediately.
+- Auto-delete after TTL (time-to-live) or manual trigger.
+- Audit logs of arm/disarm/destroy events.
+- Background sweeper job deletes expired content.
+
+### Danger Purge Button
+- In tenant Settings, add **DANGER: PURGE ALL TENANT DATA**.
+- Owner/super-admin only.
+- No confirmation step.
+- Purge flow:
+  1. Revoke sessions/tokens.
+  2. Destroy tenant encryption keys.
+  3. Hard delete all tenant-scoped data.
+  4. Write irreversible audit entry.
+- Must be idempotent (safe if triggered multiple times).
+
+### Inactivity Auto-Deletion Policy
+- Tenant config options: “3 days”, “7 days”, “10 days”, “Life”.
+- Track `last_owner_login_at`.
+- If cutoff exceeded:
+  - Trigger purge flow as above.
+  - Send warning notices at 24h and 1h (if policy not “Life”).
+
+## TENANCY & ISOLATION
+- Every table and file must include tenant_id.
+- Enforce strict tenant isolation via row-level security or equivalent.
+- Super Admin can manage tenants globally.
+- All audit logs include actor, tenant_id, timestamp, and action.
+
+## SECURITY PRINCIPLES
+- Encrypt all sensitive fields.
+- Tenant-scoped keys, rotatable/revocable.
+- All destructive actions logged irreversibly.
+- Default feature flags OFF for destructive or advanced features.
+- Ensure idempotency across purge, retention, and payment flows.
+- Regular key rotation policy.
+
+## DELIVERABLES
+1. Database/data model migrations for:
+   - Encrypted fields
+   - Retention policies
+   - Self-destruct
+   - Audit logs
+   - Payments, loyalty, credit modules
+2. Background job system spec for sweeper and retention enforcement.
+3. Interfaces for encryption, payments, loyalty, credit (language-neutral).
+4. UI wireframes for:
+   - Dashboard
+   - Inventory
+   - Customers
+   - Sales
+   - Delivery
+   - Loyalty
+   - Credit
+   - Payments
+   - Settings (Danger Zone, retention, feature flags)
+   - Help system
+5. Documentation for tenant owners:
+   - Purge button behavior
+   - Retention policy
+   - Self-destruct usage
+   - Payment workflows
+   - Key management
+   - Loyalty and credit rules

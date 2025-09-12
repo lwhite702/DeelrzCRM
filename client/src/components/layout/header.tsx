@@ -63,7 +63,7 @@ export default function Header({ onMobileMenuToggle, tenantName }: HeaderProps) 
               />
               <div className="hidden sm:block">
                 <h1 className="text-lg font-semibold text-foreground" data-testid="text-tenant-name">
-                  {tenantName || "DeelrzCRM"}
+                  {tenantName || "DeelRxCRM"}
                 </h1>
               </div>
             </div>

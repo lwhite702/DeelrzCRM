@@ -1,8 +1,6 @@
 import { BRAND } from "./branding";
 import { cn } from "@/lib/utils";
 
-import _0DDB8BB9_E5D9_4E6F_8B81_F470ECE85269 from "@assets/0DDB8BB9-E5D9-4E6F-8B81-F470ECE85269.png";
-
 interface BrandMarkProps {
   variant?: "logo" | "icon";
   size?: "sm" | "md" | "lg" | "xl";
@@ -87,17 +85,15 @@ export function BrandMark({
     >
       <picture>
         <img
-          src={_0DDB8BB9_E5D9_4E6F_8B81_F470ECE85269}
+          src={BRAND.assets.logoMain}
           alt={BRAND.name}
           width={width}
           height={height}
           className="flex-shrink-0"
           onError={(e) => {
-            console.warn("Logo failed to load:", logoSrc);
-            // Try fallback to light logo if dark fails
-            if (logoSrc === BRAND.assets.logoDark) {
-              (e.target as HTMLImageElement).src = BRAND.assets.logoLight;
-            }
+            console.warn("Logo failed to load:", BRAND.assets.logoMain);
+            // Try fallback to themed logos
+            (e.target as HTMLImageElement).src = isDarkMode ? BRAND.assets.logoDark : BRAND.assets.logoLight;
           }}
         />
       </picture>

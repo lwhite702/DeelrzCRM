@@ -67,10 +67,7 @@ export function useTour(options: UseTourOptions = {}): UseTourReturn {
   // Update user settings mutation
   const updateSettingsMutation = useMutation({
     mutationFn: async (settings: Partial<UserSettings>) => {
-      return await apiRequest("/api/user/settings", {
-        method: "PUT",
-        body: JSON.stringify(settings),
-      });
+      return await apiRequest("PUT", "/api/user/settings", settings);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/user/settings"] });
@@ -102,9 +99,9 @@ export function useTour(options: UseTourOptions = {}): UseTourReturn {
                               autoStartForNewUsers;
 
   // Check if tour can be resumed
-  const canResumeTour = !hasCompletedTour && 
-                       tourProgress?.currentStepId && 
-                       !isTourActive;
+  const canResumeTour = Boolean(!hasCompletedTour && 
+                               tourProgress?.currentStepId && 
+                               !isTourActive);
 
   // Start tour
   const startTour = useCallback(async (fromStep?: string) => {
@@ -160,7 +157,7 @@ export function useTour(options: UseTourOptions = {}): UseTourReturn {
 
       toast({
         title: "Tour completed! 🎉",
-        description: "You've successfully completed the guided tour. Welcome to DeelrzCRM!",
+        description: "You've successfully completed the guided tour. Welcome to DeelRxCRM!",
         variant: "default",
       });
     } catch (error) {
@@ -320,13 +317,9 @@ export function useTour(options: UseTourOptions = {}): UseTourReturn {
       const timer = setTimeout(() => {
         if (!isTourActive && !hasCompletedTour) {
           toast({
-            title: "Welcome to DeelrzCRM! 👋",
-            description: "Would you like to take a quick tour to get started?",
+            title: "Welcome to DeelRxCRM! 👋",
+            description: "Would you like to take a quick tour to get started? Click the Help menu to start the tour.",
             variant: "default",
-            action: {
-              altText: "Start Tour",
-              onClick: () => startTour(),
-            },
           });
         }
       }, 2000);

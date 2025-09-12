@@ -32,7 +32,7 @@ const BRAND_RULES = [
     name: 'No PharmaCare references',
     pattern: /PharmaCare|pharmacare|PHARMACARE/g,
     severity: 'error',
-    message: 'Use "DeelrzCRM" instead of "PharmaCare"',
+    message: 'Use "DeelRxCRM" instead of "PharmaCare"',
     allowedPaths: []
   },
   {
@@ -245,7 +245,7 @@ class BrandChecker {
     
     console.log('💡 Tips:');
     console.log('- Use BrandMark component for all logo/icon usage');
-    console.log('- Replace "PharmaCare" with "DeelrzCRM" in all text');
+    console.log('- Replace "PharmaCare" with "DeelRxCRM" in all text');
     console.log('- Use CSS custom properties for brand colors');
     console.log('- Run with --fix flag to auto-fix some issues');
     

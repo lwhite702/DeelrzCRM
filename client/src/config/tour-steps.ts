@@ -19,7 +19,7 @@ export const tourSteps: TourStep[] = [
   {
     id: 'welcome',
     element: '[data-testid="main-layout"]',
-    title: 'Welcome to DeelrzCRM! 🎉',
+    title: 'Welcome to DeelRxCRM! 🎉',
     description: 'Let\'s take a quick tour to help you get started with your pharmacy management system. This will only take a few minutes.',
     position: 'bottom',
     category: 'welcome',
@@ -252,7 +252,6 @@ export const tourSteps: TourStep[] = [
     category: 'complete',
     popover: {
       showButtons: ['close'],
-      closeBtnText: 'Get Started',
     }
   }
 ];

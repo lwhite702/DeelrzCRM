@@ -190,7 +190,7 @@ const basicAuth = (req: Request, res: Response, next: NextFunction) => {
   const auth = req.headers.authorization;
   
   if (!auth || !auth.startsWith('Basic ')) {
-    res.setHeader('WWW-Authenticate', 'Basic realm="DeelrzCRM Beta Access"');
+    res.setHeader('WWW-Authenticate', 'Basic realm="DeelRxCRM Beta Access"');
     return res.status(401).json({ message: 'Authentication required for beta access' });
   }
 
@@ -201,7 +201,7 @@ const basicAuth = (req: Request, res: Response, next: NextFunction) => {
   const validPass = process.env.BETA_PASS || 'access';
 
   if (username !== validUser || password !== validPass) {
-    res.setHeader('WWW-Authenticate', 'Basic realm="DeelrzCRM Beta Access"');
+    res.setHeader('WWW-Authenticate', 'Basic realm="DeelRxCRM Beta Access"');
     return res.status(401).json({ message: 'Invalid credentials' });
   }
 

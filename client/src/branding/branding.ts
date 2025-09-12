@@ -1,14 +1,21 @@
 export const BRAND = {
-  name: "DeelrzCRM",
+  name: "DeelRxCRM",
   tagline: "High Business. High Quality CRM. Powered by Clouds",
   colors: {
-    primary: "#4DA6FF", // Cloud Blue
-    secondary: "#75BDEB", // Sky Gradient  
-    background: "#F5F0EA", // Warm Beige (matches logo background)
-    backgroundAlt: "#FEFCFA", // Light Cream
-    text: "#333333" // Dark Gray
+    // Graffiti/Urban theme with neon accents and dark base
+    primary: "#00FFFF", // Neon Cyan
+    secondary: "#FF6B35", // Neon Orange
+    accent: "#FF1493", // Neon Pink
+    success: "#39FF14", // Neon Green
+    warning: "#FFD700", // Neon Gold
+    background: "#0D1117", // Dark GitHub-style background
+    backgroundAlt: "#161B22", // Slightly lighter dark
+    surface: "#21262D", // Card/surface color
+    text: "#F0F6FC", // Light text for dark theme
+    textMuted: "#8B949E" // Muted text
   },
   assets: {
+    logoMain: "/branding/deelzrxcrm-logo-graffiti.png", // Graffiti logo in public/branding
     logoLight: "/branding/deelzrxcrm-logo-light.svg",
     logoDark: "/branding/deelzrxcrm-logo-dark.svg", 
     favicon: "/branding/favicon.svg"

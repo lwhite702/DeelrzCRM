@@ -1,6 +1,6 @@
-# DeelrzCRM Production-Safe Improvements - Acceptance Tests
+# DeelRxCRM Production-Safe Improvements - Acceptance Tests
 
-This document explains how to run and interpret the acceptance tests for the production-safe improvements implemented in DeelrzCRM.
+This document explains how to run and interpret the acceptance tests for the production-safe improvements implemented in DeelRxCRM.
 
 ## Running the Tests
 
