@@ -1,6 +1,8 @@
 import { BRAND } from "./branding";
 import { cn } from "@/lib/utils";
 
+import _0DDB8BB9_E5D9_4E6F_8B81_F470ECE85269 from "@assets/0DDB8BB9-E5D9-4E6F-8B81-F470ECE85269.png";
+
 interface BrandMarkProps {
   variant?: "logo" | "icon";
   size?: "sm" | "md" | "lg" | "xl";
@@ -85,7 +87,7 @@ export function BrandMark({
     >
       <picture>
         <img
-          src={logoSrc}
+          src={_0DDB8BB9_E5D9_4E6F_8B81_F470ECE85269}
           alt={BRAND.name}
           width={width}
           height={height}
