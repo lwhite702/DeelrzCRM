@@ -9,6 +9,7 @@ import path from "path";
 import fs from "fs";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { storage } from "./storage";
 
 const app = express();
 
@@ -292,6 +293,103 @@ app.use((req, res, next) => {
       res.sendFile(path.resolve(staticDir, 'index.html'));
     });
   }
+
+  // Background Sweeper Job for Self-Destructible Content
+  const startSelfDestructSweeper = () => {
+    let sweeperInterval: NodeJS.Timeout;
+
+    const runSweeper = async () => {
+      try {
+        // Get all tenants to check for expired content
+        const allTenants = await storage.getFeatureFlags();
+        const tenantFlags = await Promise.all(
+          // Get all tenants by checking feature flag overrides
+          (await storage.getFeatureFlags()).map(async (flag) => {
+            if (flag.key === 'self_destruct_enabled') {
+              // This is inefficient but simple for demo - in production you'd want a better way to list tenants
+              return null;
+            }
+            return null;
+          })
+        );
+
+        // More efficient approach: query directly for armed self-destructs that are expired
+        const { db } = await import("./db");
+        const { selfDestructs } = await import("@shared/schema");
+        const { eq, and, lte } = await import("drizzle-orm");
+        
+        const expiredSelfDestructs = await db
+          .select()
+          .from(selfDestructs)
+          .where(
+            and(
+              eq(selfDestructs.status, 'armed'),
+              lte(selfDestructs.destructAt, new Date())
+            )
+          );
+
+        if (expiredSelfDestructs.length === 0) {
+          return; // No expired content to process
+        }
+
+        log(`Self-Destruct Sweeper: Found ${expiredSelfDestructs.length} expired items to destroy`);
+
+        for (const selfDestruct of expiredSelfDestructs) {
+          try {
+            // Check if self-destruct is enabled for this tenant
+            const isEnabled = await storage.isSelfDestructEnabled(selfDestruct.tenantId);
+            if (!isEnabled) {
+              continue; // Skip if feature is disabled for this tenant
+            }
+
+            // Use destroyNow for proper transactional handling
+            await storage.destroyNowSystem(
+              selfDestruct.id,
+              selfDestruct.tenantId, 
+              `Automated destruction of expired content (TTL: ${selfDestruct.destructAt?.toISOString()})`
+            );
+
+            log(`Self-Destruct Sweeper: Destroyed ${selfDestruct.targetTable}:${selfDestruct.targetId} for tenant ${selfDestruct.tenantId}`);
+          } catch (error) {
+            console.error(`Self-Destruct Sweeper: Failed to destroy ${selfDestruct.targetTable}:${selfDestruct.targetId}:`, error);
+            // Continue with next item even if one fails
+          }
+        }
+
+        log(`Self-Destruct Sweeper: Completed processing ${expiredSelfDestructs.length} expired items`);
+      } catch (error) {
+        console.error('Self-Destruct Sweeper: Critical error during sweeper run:', error);
+        // Don't stop the sweeper, just log and continue
+      }
+    };
+
+    // Run sweeper immediately on startup (after a 30-second delay)
+    setTimeout(() => {
+      runSweeper();
+    }, 30000);
+
+    // Then run every 60 seconds
+    sweeperInterval = setInterval(runSweeper, 60000);
+
+    log('Self-Destruct Sweeper: Background job started (60-second intervals)');
+
+    // Graceful shutdown handling
+    const stopSweeper = () => {
+      if (sweeperInterval) {
+        clearInterval(sweeperInterval);
+        log('Self-Destruct Sweeper: Background job stopped');
+      }
+    };
+
+    process.on('SIGTERM', stopSweeper);
+    process.on('SIGINT', stopSweeper);
+    process.on('exit', stopSweeper);
+
+    return stopSweeper;
+  };
+
+  // Start the sweeper job
+  startSelfDestructSweeper();
 
   // ALWAYS serve the app on the port specified in the environment variable PORT
   // Other ports are firewalled. Default to 5000 if not specified.

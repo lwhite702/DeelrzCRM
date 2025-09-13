@@ -22,6 +22,8 @@ import {
   insertKbArticleSchema,
   insertKbFeedbackSchema,
   insertUserSettingsSchema,
+  insertSelfDestructSchema,
+  insertAuditLogSchema,
   batches,
   products,
   payments,
@@ -90,6 +92,38 @@ const requireSuperAdmin = async (req: any, res: any, next: any) => {
     next();
   } catch (error) {
     console.error("Super admin authorization error:", error);
+    res.status(500).json({ message: "Authorization check failed" });
+  }
+};
+
+// Owner/Super admin authorization middleware for self-destruct operations
+const requireOwnerOrSuperAdmin = async (req: any, res: any, next: any) => {
+  try {
+    const userId = req.user.claims.sub;
+    const { tenantId } = req.params;
+    
+    // Get user tenants to check role for this specific tenant
+    const userTenants = await storage.getUserTenants(userId);
+    const userTenant = userTenants.find(ut => ut.tenantId === tenantId);
+    
+    if (!userTenant) {
+      return res.status(403).json({ 
+        message: "Access denied: No access to this tenant" 
+      });
+    }
+    
+    // Check if user is owner or super admin for this tenant
+    const hasPermission = userTenant.role === "owner" || userTenant.role === "super_admin";
+    
+    if (!hasPermission) {
+      return res.status(403).json({ 
+        message: "Access denied: Owner or super admin role required for self-destruct operations" 
+      });
+    }
+    
+    next();
+  } catch (error) {
+    console.error("Owner/super admin authorization error:", error);
     res.status(500).json({ message: "Authorization check failed" });
   }
 };
@@ -1805,6 +1839,185 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error deleting image:", error);
       res.status(500).json({ message: "Failed to delete image" });
+    }
+  });
+
+  // Self-Destruct Management Routes (Owner/Super Admin Only)
+  
+  // POST /api/tenants/:tenantId/self-destruct/arm - Arm content for self-destruction
+  tenantRouter.post("/self-destruct/arm", requireOwnerOrSuperAdmin, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const userId = req.user.claims.sub;
+      
+      // Validate request body with extended schema for TTL support
+      const armSchema = insertSelfDestructSchema.extend({
+        destructAt: z.string().datetime().optional(), // ISO 8601 datetime string
+      });
+      
+      const { targetTable, targetId, reason, destructAt, metadata } = armSchema.parse(req.body);
+      
+      // Convert destructAt string to Date if provided
+      const destructAtDate = destructAt ? new Date(destructAt) : undefined;
+      
+      // Validate target table is supported
+      const supportedTables = ['customers', 'deliveries', 'orders', 'payments', 'credits', 'credit_transactions', 'kb_articles'];
+      if (!supportedTables.includes(targetTable)) {
+        return res.status(400).json({ 
+          message: `Unsupported target table: ${targetTable}. Supported tables: ${supportedTables.join(', ')}` 
+        });
+      }
+      
+      // Validate destructAt is in the future if provided
+      if (destructAtDate && destructAtDate <= new Date()) {
+        return res.status(400).json({ 
+          message: "destructAt must be a future timestamp" 
+        });
+      }
+      
+      const selfDestruct = await storage.armSelfDestruct({
+        tenantId,
+        targetTable,
+        targetId,
+        armedBy: userId,
+        reason,
+        destructAt: destructAtDate,
+        metadata,
+      });
+      
+      res.json({
+        message: "Content armed for self-destruction successfully",
+        selfDestruct,
+      });
+    } catch (error: any) {
+      console.error("Error arming self-destruct:", error);
+      
+      if (error.message.includes('not enabled')) {
+        return res.status(403).json({ message: error.message });
+      }
+      
+      if (error.message.includes('already armed')) {
+        return res.status(409).json({ message: error.message });
+      }
+      
+      res.status(500).json({ message: "Failed to arm content for self-destruction" });
+    }
+  });
+  
+  // POST /api/tenants/:tenantId/self-destruct/disarm - Disarm content self-destruction
+  tenantRouter.post("/self-destruct/disarm", requireOwnerOrSuperAdmin, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const userId = req.user.claims.sub;
+      
+      const { id, reason } = z.object({
+        id: z.string().uuid(),
+        reason: z.string().optional(),
+      }).parse(req.body);
+      
+      const selfDestruct = await storage.disarmSelfDestruct(id, tenantId, userId, reason);
+      
+      res.json({
+        message: "Content disarmed successfully",
+        selfDestruct,
+      });
+    } catch (error: any) {
+      console.error("Error disarming self-destruct:", error);
+      
+      if (error.message.includes('not enabled')) {
+        return res.status(403).json({ message: error.message });
+      }
+      
+      if (error.message.includes('not found')) {
+        return res.status(404).json({ message: error.message });
+      }
+      
+      res.status(500).json({ message: "Failed to disarm content" });
+    }
+  });
+  
+  // POST /api/tenants/:tenantId/self-destruct/destroy - Immediately destroy content
+  tenantRouter.post("/self-destruct/destroy", requireOwnerOrSuperAdmin, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const userId = req.user.claims.sub;
+      
+      const { id, reason } = z.object({
+        id: z.string().uuid(),
+        reason: z.string().optional(),
+      }).parse(req.body);
+      
+      await storage.destroyNow(id, tenantId, userId, reason);
+      
+      res.json({
+        message: "Content destroyed successfully",
+      });
+    } catch (error: any) {
+      console.error("Error destroying content:", error);
+      
+      if (error.message.includes('not enabled')) {
+        return res.status(403).json({ message: error.message });
+      }
+      
+      if (error.message.includes('not found')) {
+        return res.status(404).json({ message: error.message });
+      }
+      
+      res.status(500).json({ message: "Failed to destroy content" });
+    }
+  });
+  
+  // GET /api/tenants/:tenantId/self-destruct/list - List armed content (admin only)
+  tenantRouter.get("/self-destruct/list", requireOwnerOrSuperAdmin, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const { status, targetTable } = req.query;
+      
+      const filters: { status?: string; targetTable?: string } = {};
+      
+      if (status && typeof status === 'string') {
+        filters.status = status;
+      }
+      
+      if (targetTable && typeof targetTable === 'string') {
+        filters.targetTable = targetTable;
+      }
+      
+      const selfDestructs = await storage.getSelfDestructs(tenantId, filters);
+      
+      res.json(selfDestructs);
+    } catch (error: any) {
+      console.error("Error listing self-destructs:", error);
+      res.status(500).json({ message: "Failed to list self-destructs" });
+    }
+  });
+  
+  // GET /api/tenants/:tenantId/audit-logs - Get audit logs (admin only)
+  tenantRouter.get("/audit-logs", requireOwnerOrSuperAdmin, async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const { targetTable, targetId, action } = req.query;
+      
+      const filters: { targetTable?: string; targetId?: string; action?: string } = {};
+      
+      if (targetTable && typeof targetTable === 'string') {
+        filters.targetTable = targetTable;
+      }
+      
+      if (targetId && typeof targetId === 'string') {
+        filters.targetId = targetId;
+      }
+      
+      if (action && typeof action === 'string') {
+        filters.action = action;
+      }
+      
+      const auditLogs = await storage.getAuditLogs(tenantId, filters);
+      
+      res.json(auditLogs);
+    } catch (error: any) {
+      console.error("Error fetching audit logs:", error);
+      res.status(500).json({ message: "Failed to fetch audit logs" });
     }
   });
 

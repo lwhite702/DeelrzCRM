@@ -51,6 +51,12 @@ import {
   tenantKeys,
   type TenantKey,
   type InsertTenantKey,
+  selfDestructs,
+  type SelfDestruct,
+  type InsertSelfDestruct,
+  auditLogs,
+  type AuditLog,
+  type InsertAuditLog,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sql, or, like, ilike, isNull } from "drizzle-orm";
@@ -207,6 +213,35 @@ export interface IStorage {
     customerPhone?: string;
   }>>;
   createDeliveryEncrypted(delivery: any): Promise<any>;
+  
+  // Self-Destruct Management
+  isSelfDestructEnabled(tenantId: string): Promise<boolean>;
+  getArmedIds(tenantId: string, targetTable: string): Promise<string[]>;
+  filterOutArmed<T extends { id: string }>(tenantId: string, targetTable: string, records: T[]): Promise<T[]>;
+  armSelfDestruct(data: {
+    tenantId: string;
+    targetTable: string;
+    targetId: string;
+    armedBy: string;
+    reason?: string;
+    destructAt?: Date;
+    metadata?: any;
+  }): Promise<SelfDestruct>;
+  disarmSelfDestruct(id: string, tenantId: string, disarmedBy: string, reason?: string): Promise<SelfDestruct>;
+  destroyNow(id: string, tenantId: string, destroyedBy: string, reason?: string): Promise<void>;
+  destroyNowSystem(id: string, tenantId: string, reason?: string): Promise<void>;
+  getSelfDestructs(tenantId: string, filters?: { status?: string; targetTable?: string }): Promise<Array<SelfDestruct & { 
+    targetTableName: string;
+    armedByName?: string;
+    disarmedByName?: string; 
+    destroyedByName?: string;
+  }>>;
+  
+  // Audit Logs
+  createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
+  getAuditLogs(tenantId: string, filters?: { targetTable?: string; targetId?: string; action?: string }): Promise<Array<AuditLog & {
+    actorName?: string;
+  }>>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -386,7 +421,10 @@ export class DatabaseStorage implements IStorage {
 
   // Customers
   async getCustomers(tenantId: string): Promise<Customer[]> {
-    const customerList = await db.select().from(customers).where(eq(customers.tenantId, tenantId));
+    let customerList = await db.select().from(customers).where(eq(customers.tenantId, tenantId));
+    
+    // Filter out armed content if self-destruct is enabled
+    customerList = await this.filterOutArmed(tenantId, 'customers', customerList);
     
     // Check if encryption is enabled for this tenant
     const encryptionEnabled = await this.isEncryptionEnabled(tenantId);
@@ -478,11 +516,16 @@ export class DatabaseStorage implements IStorage {
 
   // Orders
   async getOrders(tenantId: string): Promise<Order[]> {
-    return await db
+    let orderList = await db
       .select()
       .from(orders)
       .where(eq(orders.tenantId, tenantId))
       .orderBy(desc(orders.createdAt));
+    
+    // Filter out armed content if self-destruct is enabled
+    orderList = await this.filterOutArmed(tenantId, 'orders', orderList);
+    
+    return orderList;
   }
 
   async createOrder(order: InsertOrder): Promise<Order> {
@@ -649,7 +692,9 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(customers, eq(credits.customerId, customers.id))
       .where(eq(credits.tenantId, tenantId));
     
-    return results as (Credit & { customerName: string })[];
+    // Filter out armed records
+    const filteredResults = await this.filterOutArmed(tenantId, 'credits', results);
+    return filteredResults as (Credit & { customerName: string })[];
   }
 
   async getCreditTransactions(tenantId: string): Promise<Array<CreditTransaction & { 
@@ -677,7 +722,7 @@ export class DatabaseStorage implements IStorage {
       .where(eq(creditTransactions.tenantId, tenantId))
       .orderBy(desc(creditTransactions.createdAt));
 
-    return results.map(r => {
+    const mappedResults = results.map(r => {
       const now = new Date();
       const overdue = r.dueDate && r.status === 'pending' && r.dueDate < now;
       
@@ -687,7 +732,11 @@ export class DatabaseStorage implements IStorage {
         nextDue: r.dueDate?.toISOString(),
         overdue: Boolean(overdue),
       };
-    }) as Array<CreditTransaction & { 
+    });
+
+    // Filter out armed records
+    const filteredResults = await this.filterOutArmed(tenantId, 'credit_transactions', mappedResults);
+    return filteredResults as Array<CreditTransaction & { 
       customerName: string;
       lastPayment?: string;
       nextDue?: string;
@@ -866,7 +915,9 @@ export class DatabaseStorage implements IStorage {
       .where(eq(payments.tenantId, tenantId))
       .orderBy(desc(payments.createdAt));
     
-    return results as Array<Payment & { customerName?: string }>;
+    // Filter out armed records
+    const filteredResults = await this.filterOutArmed(tenantId, 'payments', results);
+    return filteredResults as Array<Payment & { customerName?: string }>;
   }
 
   async createPayment(payment: InsertPayment): Promise<Payment> {
@@ -1237,11 +1288,18 @@ export class DatabaseStorage implements IStorage {
       }
     }
     
-    return await db
+    const results = await db
       .select()
       .from(kbArticles)
       .where(and(...conditions))
       .orderBy(desc(kbArticles.createdAt));
+      
+    // Apply filterOutArmed for tenant-specific requests
+    if (filters?.tenantId && filters.tenantId !== null) {
+      return await this.filterOutArmed(filters.tenantId, 'kb_articles', results);
+    }
+    
+    return results;
   }
 
   async getKbArticleBySlug(slug: string): Promise<KbArticle | undefined> {
@@ -2331,10 +2389,13 @@ X-RateLimit-Reset: 1642284000
 
       const encryptionEnabled = await this.isEncryptionEnabled(tenantId);
 
+      // Filter out armed deliveries if self-destruct is enabled
+      const filteredResults = await this.filterOutArmed(tenantId, 'deliveries', results);
+
       // Decrypt delivery addresses if encryption is enabled
       if (encryptionEnabled) {
         const decryptedResults = await Promise.all(
-          results.map(async (result) => {
+          filteredResults.map(async (result) => {
             return {
               ...result,
               addressLine1: result.addressLine1Enc
@@ -2355,7 +2416,7 @@ X-RateLimit-Reset: 1642284000
       }
 
       // Return regular results if encryption is not enabled
-      return results.map(r => ({
+      return filteredResults.map(r => ({
         ...r,
         customerName: r.customerName || 'Walk-in Customer',
         addressLine1: r.addressLine1 || '',
@@ -2439,6 +2500,11 @@ X-RateLimit-Reset: 1642284000
           description: 'Enable automated inventory reordering based on thresholds',
           defaultEnabled: true,
         },
+        {
+          key: 'self_destruct_enabled',
+          description: 'Enable self-destructible content system for enhanced data security. Allows armed content to be automatically destroyed based on TTL.',
+          defaultEnabled: false, // Default to false for security and controlled rollout
+        },
       ];
 
       // Insert all feature flags
@@ -2447,6 +2513,707 @@ X-RateLimit-Reset: 1642284000
     } catch (error) {
       console.error('Failed to seed feature flags:', error);
       throw new Error('Feature flag seeding failed');
+    }
+  }
+
+  // Self-Destruct Management Implementation
+  async isSelfDestructEnabled(tenantId: string): Promise<boolean> {
+    const tenantFlags = await this.getTenantFeatureFlags(tenantId);
+    return tenantFlags['self_destruct_enabled'] === true;
+  }
+
+  async getArmedIds(tenantId: string, targetTable: string): Promise<string[]> {
+    const armedRecords = await db
+      .select({ targetId: selfDestructs.targetId })
+      .from(selfDestructs)
+      .where(
+        and(
+          eq(selfDestructs.tenantId, tenantId),
+          eq(selfDestructs.targetTable, targetTable),
+          eq(selfDestructs.status, 'armed')
+        )
+      );
+    
+    return armedRecords.map(record => record.targetId);
+  }
+
+  async filterOutArmed<T extends { id: string }>(
+    tenantId: string, 
+    targetTable: string, 
+    records: T[]
+  ): Promise<T[]> {
+    const isEnabled = await this.isSelfDestructEnabled(tenantId);
+    if (!isEnabled) {
+      return records; // Return all records if feature is disabled
+    }
+
+    const armedIds = await this.getArmedIds(tenantId, targetTable);
+    if (armedIds.length === 0) {
+      return records; // No armed records to filter
+    }
+
+    return records.filter(record => !armedIds.includes(record.id));
+  }
+
+  async armSelfDestruct(data: {
+    tenantId: string;
+    targetTable: string;
+    targetId: string;
+    armedBy: string;
+    reason?: string;
+    destructAt?: Date;
+    metadata?: any;
+  }): Promise<SelfDestruct> {
+    try {
+      // Check if self-destruct is enabled for this tenant
+      const isEnabled = await this.isSelfDestructEnabled(data.tenantId);
+      if (!isEnabled) {
+        throw new Error('Self-destruct feature is not enabled for this tenant');
+      }
+
+      // Validate target record exists and belongs to tenant BEFORE any operations
+      await this._validateTargetOwnership(data.tenantId, data.targetTable, data.targetId);
+
+      // Check if already armed
+      const existing = await db
+        .select()
+        .from(selfDestructs)
+        .where(
+          and(
+            eq(selfDestructs.tenantId, data.tenantId),
+            eq(selfDestructs.targetTable, data.targetTable),
+            eq(selfDestructs.targetId, data.targetId),
+            eq(selfDestructs.status, 'armed')
+          )
+        )
+        .limit(1);
+
+      if (existing.length > 0) {
+        throw new Error('Content is already armed for self-destruction');
+      }
+
+      // Create self-destruct record
+      const [selfDestruct] = await db
+        .insert(selfDestructs)
+        .values({
+          tenantId: data.tenantId,
+          targetTable: data.targetTable,
+          targetId: data.targetId,
+          armedBy: data.armedBy,
+          reason: data.reason,
+          destructAt: data.destructAt,
+          metadata: data.metadata,
+          status: 'armed',
+        })
+        .returning();
+
+      // Create audit log
+      await this.createAuditLog({
+        tenantId: data.tenantId,
+        targetTable: data.targetTable,
+        targetId: data.targetId,
+        action: 'arm_self_destruct',
+        actor: data.armedBy,
+        actorType: 'user',
+        reason: data.reason,
+        metadata: {
+          selfDestructId: selfDestruct.id,
+          destructAt: data.destructAt?.toISOString(),
+          ...data.metadata,
+        },
+      });
+
+      return selfDestruct;
+    } catch (error) {
+      console.error('Failed to arm self-destruct:', error);
+      throw error;
+    }
+  }
+
+  async disarmSelfDestruct(
+    id: string, 
+    tenantId: string, 
+    disarmedBy: string, 
+    reason?: string
+  ): Promise<SelfDestruct> {
+    try {
+      // Check if self-destruct is enabled for this tenant
+      const isEnabled = await this.isSelfDestructEnabled(tenantId);
+      if (!isEnabled) {
+        throw new Error('Self-destruct feature is not enabled for this tenant');
+      }
+
+      // Get the current self-destruct record
+      const [current] = await db
+        .select()
+        .from(selfDestructs)
+        .where(
+          and(
+            eq(selfDestructs.id, id),
+            eq(selfDestructs.tenantId, tenantId),
+            eq(selfDestructs.status, 'armed')
+          )
+        );
+
+      if (!current) {
+        throw new Error('Armed self-destruct record not found');
+      }
+
+      // Validate target still exists and belongs to tenant
+      await this._validateTargetOwnership(tenantId, current.targetTable, current.targetId);
+
+      // Update status to disarmed
+      const [disarmed] = await db
+        .update(selfDestructs)
+        .set({
+          status: 'disarmed',
+          disarmedBy,
+        })
+        .where(eq(selfDestructs.id, id))
+        .returning();
+
+      // Create audit log
+      await this.createAuditLog({
+        tenantId,
+        targetTable: current.targetTable,
+        targetId: current.targetId,
+        action: 'disarm_self_destruct',
+        actor: disarmedBy,
+        actorType: 'user',
+        reason,
+        metadata: {
+          selfDestructId: id,
+          originalArmedBy: current.armedBy,
+        },
+      });
+
+      return disarmed;
+    } catch (error) {
+      console.error('Failed to disarm self-destruct:', error);
+      throw error;
+    }
+  }
+
+  async destroyNow(
+    id: string, 
+    tenantId: string, 
+    destroyedBy: string, 
+    reason?: string
+  ): Promise<void> {
+    return this._destroyNowInternal(id, tenantId, destroyedBy, 'user', reason);
+  }
+
+  async destroyNowSystem(
+    id: string, 
+    tenantId: string, 
+    reason?: string
+  ): Promise<void> {
+    return this._destroyNowInternal(id, tenantId, null, 'sweeper', reason);
+  }
+
+  private async _destroyNowInternal(
+    id: string, 
+    tenantId: string, 
+    destroyedBy: string | null, 
+    actorType: 'user' | 'sweeper',
+    reason?: string
+  ): Promise<void> {
+    const transaction = await db.transaction(async (tx) => {
+      try {
+        // Check if self-destruct is enabled for this tenant
+        const isEnabled = await this.isSelfDestructEnabled(tenantId);
+        if (!isEnabled) {
+          throw new Error('Self-destruct feature is not enabled for this tenant');
+        }
+
+        // Get the current self-destruct record
+        const [current] = await tx
+          .select()
+          .from(selfDestructs)
+          .where(
+            and(
+              eq(selfDestructs.id, id),
+              eq(selfDestructs.tenantId, tenantId),
+              eq(selfDestructs.status, 'armed')
+            )
+          );
+
+        if (!current) {
+          throw new Error('Armed self-destruct record not found');
+        }
+
+        // Validate target record exists and belongs to tenant for security
+        await this._validateTargetOwnership(tenantId, current.targetTable, current.targetId);
+
+        // Perform hard deletion based on target table (within transaction)
+        await this._performHardDeletionTransactional(tx, tenantId, current.targetTable, current.targetId);
+
+        // Update self-destruct status
+        await tx
+          .update(selfDestructs)
+          .set({
+            status: 'destroyed',
+            destroyedBy,
+            destroyedAt: new Date(),
+          })
+          .where(eq(selfDestructs.id, id));
+
+        // Create audit log
+        await tx.insert(auditLogs).values({
+          tenantId,
+          targetTable: current.targetTable,
+          targetId: current.targetId,
+          action: actorType === 'sweeper' ? 'sweeper_destroy' : 'destroy_self_destruct',
+          actor: destroyedBy,
+          actorType: actorType,
+          reason,
+          metadata: {
+            selfDestructId: id,
+            originalArmedBy: current.armedBy,
+            ...(actorType === 'sweeper' && {
+              armedAt: current.armedAt?.toISOString(),
+              sweeperRun: new Date().toISOString(),
+            }),
+          },
+        });
+
+        return current; // Return for logging purposes
+      } catch (error) {
+        console.error('Failed to destroy content:', error);
+        throw error;
+      }
+    });
+  }
+
+  async getSelfDestructs(
+    tenantId: string, 
+    filters?: { status?: string; targetTable?: string }
+  ): Promise<Array<SelfDestruct & { 
+    targetTableName: string;
+    armedByName?: string;
+    disarmedByName?: string; 
+    destroyedByName?: string;
+  }>> {
+    try {
+      let query = db
+        .select({
+          selfDestruct: selfDestructs,
+          armedByUser: {
+            firstName: users.firstName,
+            lastName: users.lastName,
+          },
+        })
+        .from(selfDestructs)
+        .leftJoin(users, eq(selfDestructs.armedBy, users.id))
+        .where(eq(selfDestructs.tenantId, tenantId));
+
+      if (filters?.status) {
+        query = query.where(
+          and(
+            eq(selfDestructs.tenantId, tenantId),
+            eq(selfDestructs.status, filters.status as any)
+          )
+        );
+      }
+
+      if (filters?.targetTable) {
+        query = query.where(
+          and(
+            eq(selfDestructs.tenantId, tenantId),
+            eq(selfDestructs.targetTable, filters.targetTable)
+          )
+        );
+      }
+
+      const results = await query.orderBy(desc(selfDestructs.armedAt));
+
+      return results.map(result => ({
+        ...result.selfDestruct,
+        targetTableName: result.selfDestruct.targetTable,
+        armedByName: result.armedByUser.firstName && result.armedByUser.lastName
+          ? `${result.armedByUser.firstName} ${result.armedByUser.lastName}`
+          : undefined,
+      }));
+    } catch (error) {
+      console.error('Failed to get self-destructs:', error);
+      throw error;
+    }
+  }
+
+  // Audit Logs Implementation
+  async createAuditLog(log: InsertAuditLog): Promise<AuditLog> {
+    try {
+      const [auditLog] = await db.insert(auditLogs).values(log).returning();
+      return auditLog;
+    } catch (error) {
+      console.error('Failed to create audit log:', error);
+      throw error;
+    }
+  }
+
+  async getAuditLogs(
+    tenantId: string, 
+    filters?: { targetTable?: string; targetId?: string; action?: string }
+  ): Promise<Array<AuditLog & { actorName?: string }>> {
+    try {
+      let query = db
+        .select({
+          auditLog: auditLogs,
+          actorUser: {
+            firstName: users.firstName,
+            lastName: users.lastName,
+          },
+        })
+        .from(auditLogs)
+        .leftJoin(users, eq(auditLogs.actor, users.id))
+        .where(eq(auditLogs.tenantId, tenantId));
+
+      if (filters?.targetTable) {
+        query = query.where(
+          and(
+            eq(auditLogs.tenantId, tenantId),
+            eq(auditLogs.targetTable, filters.targetTable)
+          )
+        );
+      }
+
+      if (filters?.targetId) {
+        query = query.where(
+          and(
+            eq(auditLogs.tenantId, tenantId),
+            eq(auditLogs.targetId, filters.targetId)
+          )
+        );
+      }
+
+      if (filters?.action) {
+        query = query.where(
+          and(
+            eq(auditLogs.tenantId, tenantId),
+            eq(auditLogs.action, filters.action as any)
+          )
+        );
+      }
+
+      const results = await query.orderBy(desc(auditLogs.createdAt));
+
+      return results.map(result => ({
+        ...result.auditLog,
+        actorName: result.actorUser.firstName && result.actorUser.lastName
+          ? `${result.actorUser.firstName} ${result.actorUser.lastName}`
+          : undefined,
+      }));
+    } catch (error) {
+      console.error('Failed to get audit logs:', error);
+      throw error;
+    }
+  }
+
+  // Private method to validate target record exists and belongs to tenant
+  private async _validateTargetOwnership(tenantId: string, targetTable: string, targetId: string): Promise<void> {
+    let exists = false;
+    
+    switch (targetTable) {
+      case 'customers':
+        const customer = await db.select({ id: customers.id })
+          .from(customers)
+          .where(and(eq(customers.id, targetId), eq(customers.tenantId, tenantId)))
+          .limit(1);
+        exists = customer.length > 0;
+        break;
+      case 'orders':
+        const order = await db.select({ id: orders.id })
+          .from(orders)
+          .where(and(eq(orders.id, targetId), eq(orders.tenantId, tenantId)))
+          .limit(1);
+        exists = order.length > 0;
+        break;
+      case 'deliveries':
+        const delivery = await db.select({ id: deliveries.id })
+          .from(deliveries)
+          .where(and(eq(deliveries.id, targetId), eq(deliveries.tenantId, tenantId)))
+          .limit(1);
+        exists = delivery.length > 0;
+        break;
+      case 'payments':
+        const payment = await db.select({ id: payments.id })
+          .from(payments)
+          .where(and(eq(payments.id, targetId), eq(payments.tenantId, tenantId)))
+          .limit(1);
+        exists = payment.length > 0;
+        break;
+      case 'credits':
+        const credit = await db.select({ id: credits.id })
+          .from(credits)
+          .where(and(eq(credits.id, targetId), eq(credits.tenantId, tenantId)))
+          .limit(1);
+        exists = credit.length > 0;
+        break;
+      case 'kb_articles':
+        const article = await db.select({ id: kbArticles.id })
+          .from(kbArticles)
+          .where(and(eq(kbArticles.id, targetId), or(eq(kbArticles.tenantId, tenantId), isNull(kbArticles.tenantId))))
+          .limit(1);
+        exists = article.length > 0;
+        break;
+      default:
+        throw new Error(`Unsupported target table for validation: ${targetTable}`);
+    }
+    
+    if (!exists) {
+      throw new Error(`Target record not found or access denied: ${targetTable}:${targetId}`);
+    }
+  }
+
+  // Private method for transactional hard deletion
+  private async _performHardDeletionTransactional(tx: any, tenantId: string, targetTable: string, targetId: string): Promise<void> {
+    switch (targetTable) {
+      case 'customers':
+        // Delete in order: credit_transactions -> credits -> loyalty_accounts -> orders -> customer
+        await tx.delete(creditTransactions).where(
+          and(
+            eq(creditTransactions.tenantId, tenantId),
+            eq(creditTransactions.customerId, targetId)
+          )
+        );
+        await tx.delete(credits).where(
+          and(
+            eq(credits.tenantId, tenantId),
+            eq(credits.customerId, targetId)
+          )
+        );
+        await tx.delete(loyaltyAccounts).where(
+          and(
+            eq(loyaltyAccounts.tenantId, tenantId),
+            eq(loyaltyAccounts.customerId, targetId)
+          )
+        );
+        
+        // Get customer orders for cascade deletion
+        const customerOrders = await tx
+          .select({ id: orders.id })
+          .from(orders)
+          .where(
+            and(
+              eq(orders.tenantId, tenantId),
+              eq(orders.customerId, targetId)
+            )
+          );
+        
+        // Delete order items and deliveries for each order
+        for (const order of customerOrders) {
+          await tx.delete(orderItems).where(eq(orderItems.orderId, order.id));
+          await tx.delete(deliveries).where(eq(deliveries.orderId, order.id));
+        }
+        
+        // Delete orders
+        await tx.delete(orders).where(
+          and(
+            eq(orders.tenantId, tenantId),
+            eq(orders.customerId, targetId)
+          )
+        );
+        
+        // Finally delete the customer
+        await tx.delete(customers).where(
+          and(
+            eq(customers.tenantId, tenantId),
+            eq(customers.id, targetId)
+          )
+        );
+        break;
+
+      case 'orders':
+        // Delete order items and deliveries first, then the order
+        await tx.delete(orderItems).where(eq(orderItems.orderId, targetId));
+        await tx.delete(deliveries).where(eq(deliveries.orderId, targetId));
+        await tx.delete(orders).where(
+          and(
+            eq(orders.tenantId, tenantId),
+            eq(orders.id, targetId)
+          )
+        );
+        break;
+
+      case 'deliveries':
+        await tx.delete(deliveries).where(
+          and(
+            eq(deliveries.tenantId, tenantId),
+            eq(deliveries.id, targetId)
+          )
+        );
+        break;
+
+      case 'payments':
+        await tx.delete(payments).where(
+          and(
+            eq(payments.tenantId, tenantId),
+            eq(payments.id, targetId)
+          )
+        );
+        break;
+
+      case 'credits':
+        // Delete credit transactions first, then the credit account
+        await tx.delete(creditTransactions).where(
+          and(
+            eq(creditTransactions.tenantId, tenantId),
+            eq(creditTransactions.creditId, targetId)
+          )
+        );
+        await tx.delete(credits).where(
+          and(
+            eq(credits.tenantId, tenantId),
+            eq(credits.id, targetId)
+          )
+        );
+        break;
+
+      case 'kb_articles':
+        // Delete feedback first, then the article
+        await tx.delete(kbFeedback).where(eq(kbFeedback.articleId, targetId));
+        await tx.delete(kbArticles).where(
+          and(
+            eq(kbArticles.id, targetId),
+            or(
+              eq(kbArticles.tenantId, tenantId),
+              isNull(kbArticles.tenantId) // Global articles
+            )
+          )
+        );
+        break;
+
+      default:
+        throw new Error(`Unsupported target table for deletion: ${targetTable}`);
+    }
+  }
+
+  // Public method for system-level hard deletion (used by sweeper)
+  async performHardDeletion(tenantId: string, targetTable: string, targetId: string): Promise<void> {
+    try {
+      switch (targetTable) {
+        case 'customers':
+          // Delete in order: credit_transactions -> credits -> loyalty_accounts -> orders -> customer
+          await db.delete(creditTransactions).where(
+            and(
+              eq(creditTransactions.tenantId, tenantId),
+              eq(creditTransactions.customerId, targetId)
+            )
+          );
+          await db.delete(credits).where(
+            and(
+              eq(credits.tenantId, tenantId),
+              eq(credits.customerId, targetId)
+            )
+          );
+          await db.delete(loyaltyAccounts).where(
+            and(
+              eq(loyaltyAccounts.tenantId, tenantId),
+              eq(loyaltyAccounts.customerId, targetId)
+            )
+          );
+          
+          // Get customer orders for cascade deletion
+          const customerOrders = await db
+            .select({ id: orders.id })
+            .from(orders)
+            .where(
+              and(
+                eq(orders.tenantId, tenantId),
+                eq(orders.customerId, targetId)
+              )
+            );
+          
+          // Delete order items and deliveries for each order
+          for (const order of customerOrders) {
+            await db.delete(orderItems).where(eq(orderItems.orderId, order.id));
+            await db.delete(deliveries).where(eq(deliveries.orderId, order.id));
+          }
+          
+          // Delete orders
+          await db.delete(orders).where(
+            and(
+              eq(orders.tenantId, tenantId),
+              eq(orders.customerId, targetId)
+            )
+          );
+          
+          // Finally delete the customer
+          await db.delete(customers).where(
+            and(
+              eq(customers.tenantId, tenantId),
+              eq(customers.id, targetId)
+            )
+          );
+          break;
+
+        case 'orders':
+          // Delete order items and deliveries first, then the order
+          await db.delete(orderItems).where(eq(orderItems.orderId, targetId));
+          await db.delete(deliveries).where(eq(deliveries.orderId, targetId));
+          await db.delete(orders).where(
+            and(
+              eq(orders.tenantId, tenantId),
+              eq(orders.id, targetId)
+            )
+          );
+          break;
+
+        case 'deliveries':
+          await db.delete(deliveries).where(
+            and(
+              eq(deliveries.tenantId, tenantId),
+              eq(deliveries.id, targetId)
+            )
+          );
+          break;
+
+        case 'payments':
+          await db.delete(payments).where(
+            and(
+              eq(payments.tenantId, tenantId),
+              eq(payments.id, targetId)
+            )
+          );
+          break;
+
+        case 'credits':
+          // Delete credit transactions first, then the credit
+          await db.delete(creditTransactions).where(
+            and(
+              eq(creditTransactions.tenantId, tenantId),
+              eq(creditTransactions.customerId, targetId)
+            )
+          );
+          await db.delete(credits).where(
+            and(
+              eq(credits.tenantId, tenantId),
+              eq(credits.id, targetId)
+            )
+          );
+          break;
+
+        case 'credit_transactions':
+          await db.delete(creditTransactions).where(
+            and(
+              eq(creditTransactions.tenantId, tenantId),
+              eq(creditTransactions.id, targetId)
+            )
+          );
+          break;
+
+        case 'kb_articles':
+          // Delete feedback first, then the article
+          await db.delete(kbFeedback).where(eq(kbFeedback.articleId, targetId));
+          await db.delete(kbArticles).where(eq(kbArticles.id, targetId));
+          break;
+
+        default:
+          throw new Error(`Unsupported target table for hard deletion: ${targetTable}`);
+      }
+    } catch (error) {
+      console.error(`Failed to perform hard deletion for ${targetTable}:${targetId}:`, error);
+      throw error;
     }
   }
 }

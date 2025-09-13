@@ -11,6 +11,7 @@ import {
   boolean,
   pgEnum,
   uuid,
+  unique,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
@@ -56,6 +57,8 @@ export const paymentModeEnum = pgEnum("payment_mode", ["platform", "connect_stan
 export const paymentMethodEnum = pgEnum("payment_method", ["card", "cash", "custom", "transfer", "ach"]);
 export const kbCategoryEnum = pgEnum("kb_category", ["getting_started", "features", "troubleshooting", "billing", "api", "integrations", "other"]);
 export const keyStatusEnum = pgEnum("key_status", ["active", "revoked"]);
+export const selfDestructStatusEnum = pgEnum("self_destruct_status", ["armed", "disarmed", "destroyed"]);
+export const auditActionEnum = pgEnum("audit_action", ["create", "update", "delete", "arm_self_destruct", "disarm_self_destruct", "destroy_self_destruct", "sweeper_destroy"]);
 
 // Tenants
 export const tenants = pgTable("tenants", {
@@ -424,6 +427,52 @@ export const userSettings = pgTable("user_settings", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+// Self-Destructible Content Management
+export const selfDestructs = pgTable("self_destructs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  targetTable: varchar("target_table", { length: 100 }).notNull(),
+  targetId: varchar("target_id").notNull(),
+  status: selfDestructStatusEnum("status").notNull().default("armed"),
+  armedAt: timestamp("armed_at").defaultNow(),
+  destructAt: timestamp("destruct_at"), // TTL timestamp
+  destroyedAt: timestamp("destroyed_at"),
+  armedBy: varchar("armed_by").notNull().references(() => users.id),
+  disarmedBy: varchar("disarmed_by").references(() => users.id),
+  destroyedBy: varchar("destroyed_by").references(() => users.id),
+  reason: text("reason"),
+  metadata: jsonb("metadata"),
+}, (table) => [
+  index("idx_self_destructs_tenant").on(table.tenantId),
+  index("idx_self_destructs_target").on(table.targetTable, table.targetId),
+  index("idx_self_destructs_status").on(table.status),
+  index("idx_self_destructs_destruct_at").on(table.destructAt),
+  index("idx_self_destructs_armed_at").on(table.armedAt),
+  // Unique constraint for idempotency - prevent duplicate armed records
+  unique("unique_armed_target").on(table.tenantId, table.targetTable, table.targetId, table.status),
+]);
+
+// Enhanced Audit Logs
+export const auditLogs = pgTable("audit_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  targetTable: varchar("target_table", { length: 100 }).notNull(),
+  targetId: varchar("target_id").notNull(),
+  action: auditActionEnum("action").notNull(),
+  actor: varchar("actor").references(() => users.id), // null for system/sweeper actions
+  actorType: varchar("actor_type", { length: 20 }).default("user"), // user, system, sweeper
+  changes: jsonb("changes"), // before/after values for updates
+  reason: text("reason"),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => [
+  index("idx_audit_logs_tenant").on(table.tenantId),
+  index("idx_audit_logs_target").on(table.targetTable, table.targetId),
+  index("idx_audit_logs_action").on(table.action),
+  index("idx_audit_logs_actor").on(table.actor),
+  index("idx_audit_logs_created").on(table.createdAt),
+]);
+
 // Relations
 export const usersRelations = relations(users, ({ many, one }) => ({
   usersTenants: many(usersTenants),
@@ -594,6 +643,10 @@ export type KbFeedback = typeof kbFeedback.$inferSelect;
 export type InsertKbFeedback = typeof kbFeedback.$inferInsert;
 export type UserSettings = typeof userSettings.$inferSelect;
 export type InsertUserSettings = typeof userSettings.$inferInsert;
+export type SelfDestruct = typeof selfDestructs.$inferSelect;
+export type InsertSelfDestruct = typeof selfDestructs.$inferInsert;
+export type AuditLog = typeof auditLogs.$inferSelect;
+export type InsertAuditLog = typeof auditLogs.$inferInsert;
 
 // Zod schemas
 export const insertUserSchema = createInsertSchema(users).omit({
@@ -661,4 +714,15 @@ export const insertKbFeedbackSchema = createInsertSchema(kbFeedback).omit({
 
 export const insertUserSettingsSchema = createInsertSchema(userSettings).omit({
   updatedAt: true,
+});
+
+export const insertSelfDestructSchema = createInsertSchema(selfDestructs).omit({
+  id: true,
+  armedAt: true,
+  destroyedAt: true,
+});
+
+export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({
+  id: true,
+  createdAt: true,
 });
