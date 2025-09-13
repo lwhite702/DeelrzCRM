@@ -57,6 +57,9 @@ import {
   auditLogs,
   type AuditLog,
   type InsertAuditLog,
+  purgeOperations,
+  type PurgeOperation,
+  type InsertPurgeOperation,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sql, or, like, ilike, isNull } from "drizzle-orm";
@@ -241,6 +244,27 @@ export interface IStorage {
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
   getAuditLogs(tenantId: string, filters?: { targetTable?: string; targetId?: string; action?: string }): Promise<Array<AuditLog & {
     actorName?: string;
+  }>>;
+  
+  // Danger Purge Operations - EXTREMELY SENSITIVE
+  requestPurge(data: {
+    tenantId: string;
+    tenantName: string;
+    requestedBy: string;
+    reason: string;
+    ipAddress: string;
+    userAgent: string;
+  }): Promise<PurgeOperation>;
+  ackExport(purgeId: string, tenantId: string): Promise<PurgeOperation>;
+  schedulePurge(purgeId: string, tenantId: string, scheduledAt: Date, confirmationToken: string): Promise<PurgeOperation>;
+  cancelPurge(purgeId: string, tenantId: string, canceledBy: string, reason?: string): Promise<PurgeOperation>;
+  startPurge(purgeId: string, tenantId: string): Promise<PurgeOperation>;
+  completePurge(purgeId: string, tenantId: string, recordsDestroyed: number, tablesDestroyed: number): Promise<PurgeOperation>;
+  failPurge(purgeId: string, tenantId: string, errorMessage: string): Promise<PurgeOperation>;
+  purgeTenantNow(tenantId: string, purgeId: string): Promise<{ recordsDestroyed: number; tablesDestroyed: number }>;
+  getPurgeOperations(filters?: { tenantId?: string; status?: string }): Promise<Array<PurgeOperation & {
+    requestedByName?: string;
+    canceledByName?: string;
   }>>;
 }
 
@@ -3213,6 +3237,531 @@ X-RateLimit-Reset: 1642284000
       }
     } catch (error) {
       console.error(`Failed to perform hard deletion for ${targetTable}:${targetId}:`, error);
+      throw error;
+    }
+  }
+
+  // ================================
+  // DANGER PURGE OPERATIONS - EXTREMELY SENSITIVE
+  // ================================
+
+  // Request a new purge operation
+  async requestPurge(data: {
+    tenantId: string;
+    tenantName: string;
+    requestedBy: string;
+    reason: string;
+    ipAddress: string;
+    userAgent: string;
+  }): Promise<PurgeOperation> {
+    try {
+      // Check if there's already an active purge for this tenant
+      const existingPurge = await db
+        .select()
+        .from(purgeOperations)
+        .where(
+          and(
+            eq(purgeOperations.tenantId, data.tenantId),
+            or(
+              eq(purgeOperations.status, "pending"),
+              eq(purgeOperations.status, "running")
+            )
+          )
+        )
+        .limit(1);
+
+      if (existingPurge.length > 0) {
+        throw new Error("A purge operation is already active for this tenant");
+      }
+
+      const [purgeOperation] = await db
+        .insert(purgeOperations)
+        .values({
+          tenantId: data.tenantId,
+          tenantName: data.tenantName,
+          status: "pending",
+          requestedBy: data.requestedBy,
+          reason: data.reason,
+          ipAddress: data.ipAddress,
+          userAgent: data.userAgent,
+        })
+        .returning();
+
+      // Create audit log
+      await this.createAuditLog({
+        tenantId: data.tenantId,
+        targetTable: "purge_operations",
+        targetId: purgeOperation.id,
+        action: "request_purge",
+        actor: data.requestedBy,
+        actorType: "user",
+        reason: data.reason,
+        metadata: {
+          tenantName: data.tenantName,
+          ipAddress: data.ipAddress,
+          userAgent: data.userAgent,
+        },
+      });
+
+      return purgeOperation;
+    } catch (error) {
+      console.error("Failed to request purge:", error);
+      throw error;
+    }
+  }
+
+  // Acknowledge export completion
+  async ackExport(purgeId: string, tenantId: string): Promise<PurgeOperation> {
+    try {
+      const [purgeOperation] = await db
+        .update(purgeOperations)
+        .set({
+          exportAckedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(purgeOperations.id, purgeId),
+            eq(purgeOperations.tenantId, tenantId),
+            eq(purgeOperations.status, "pending")
+          )
+        )
+        .returning();
+
+      if (!purgeOperation) {
+        throw new Error("Purge operation not found or not in pending status");
+      }
+
+      // Create audit log
+      await this.createAuditLog({
+        tenantId: tenantId,
+        targetTable: "purge_operations",
+        targetId: purgeId,
+        action: "ack_export",
+        actor: purgeOperation.requestedBy,
+        actorType: "user",
+        reason: "Export acknowledged",
+      });
+
+      return purgeOperation;
+    } catch (error) {
+      console.error("Failed to acknowledge export:", error);
+      throw error;
+    }
+  }
+
+  // Schedule purge for execution
+  async schedulePurge(
+    purgeId: string,
+    tenantId: string,
+    scheduledAt: Date,
+    confirmationToken: string
+  ): Promise<PurgeOperation> {
+    try {
+      const [purgeOperation] = await db
+        .update(purgeOperations)
+        .set({
+          scheduledAt: scheduledAt,
+          confirmationToken: confirmationToken,
+        })
+        .where(
+          and(
+            eq(purgeOperations.id, purgeId),
+            eq(purgeOperations.tenantId, tenantId),
+            eq(purgeOperations.status, "pending"),
+            isNull(purgeOperations.exportAckedAt) === false
+          )
+        )
+        .returning();
+
+      if (!purgeOperation) {
+        throw new Error("Purge operation not found, not pending, or export not acknowledged");
+      }
+
+      // Create audit log
+      await this.createAuditLog({
+        tenantId: tenantId,
+        targetTable: "purge_operations",
+        targetId: purgeId,
+        action: "schedule_purge",
+        actor: purgeOperation.requestedBy,
+        actorType: "user",
+        reason: "Purge scheduled for execution",
+        metadata: {
+          scheduledAt: scheduledAt.toISOString(),
+        },
+      });
+
+      return purgeOperation;
+    } catch (error) {
+      console.error("Failed to schedule purge:", error);
+      throw error;
+    }
+  }
+
+  // Cancel a pending purge
+  async cancelPurge(
+    purgeId: string,
+    tenantId: string,
+    canceledBy: string,
+    reason?: string
+  ): Promise<PurgeOperation> {
+    try {
+      const [purgeOperation] = await db
+        .update(purgeOperations)
+        .set({
+          status: "canceled",
+          canceledAt: new Date(),
+          canceledBy: canceledBy,
+          reason: reason || "Purge canceled",
+        })
+        .where(
+          and(
+            eq(purgeOperations.id, purgeId),
+            eq(purgeOperations.tenantId, tenantId),
+            or(
+              eq(purgeOperations.status, "pending"),
+              eq(purgeOperations.status, "running")
+            )
+          )
+        )
+        .returning();
+
+      if (!purgeOperation) {
+        throw new Error("Purge operation not found or not cancelable");
+      }
+
+      // Create audit log
+      await this.createAuditLog({
+        tenantId: tenantId,
+        targetTable: "purge_operations",
+        targetId: purgeId,
+        action: "cancel_purge",
+        actor: canceledBy,
+        actorType: "user",
+        reason: reason || "Purge canceled",
+      });
+
+      return purgeOperation;
+    } catch (error) {
+      console.error("Failed to cancel purge:", error);
+      throw error;
+    }
+  }
+
+  // Start purge execution
+  async startPurge(purgeId: string, tenantId: string): Promise<PurgeOperation> {
+    try {
+      // DEFENSE-IN-DEPTH: Secondary authorization check before starting purge
+      console.warn(`🔒 SECONDARY SECURITY CHECK: Verifying danger_purge feature flag for tenant ${tenantId} before starting purge ${purgeId}`);
+      
+      const featureFlags = await this.getTenantFeatureFlags(tenantId);
+      if (!featureFlags['danger_purge']) {
+        console.error(`🚨 SECURITY BLOCK: Attempted to start purge on tenant ${tenantId} with disabled danger_purge feature`);
+        throw new Error("CRITICAL: Danger purge feature is not enabled for this tenant - aborting purge start");
+      }
+      
+      // Verify export acknowledgment for safety
+      const [purgeOp] = await db
+        .select()
+        .from(purgeOperations)
+        .where(and(eq(purgeOperations.id, purgeId), eq(purgeOperations.tenantId, tenantId)))
+        .limit(1);
+      
+      if (!purgeOp) {
+        throw new Error(`Purge operation ${purgeId} not found for tenant ${tenantId}`);
+      }
+      
+      if (!purgeOp.exportAckedAt) {
+        console.error(`🚨 SECURITY BLOCK: Attempted to start purge ${purgeId} without export acknowledgment`);
+        throw new Error("CRITICAL: Export must be acknowledged before starting purge operation");
+      }
+      
+      console.warn(`✅ SECONDARY SECURITY CHECK PASSED: Starting purge ${purgeId} for tenant ${tenantId}`);
+
+      const [purgeOperation] = await db
+        .update(purgeOperations)
+        .set({
+          status: "running",
+          startedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(purgeOperations.id, purgeId),
+            eq(purgeOperations.tenantId, tenantId),
+            eq(purgeOperations.status, "pending"),
+            isNull(purgeOperations.scheduledAt) === false
+          )
+        )
+        .returning();
+
+      if (!purgeOperation) {
+        throw new Error("Purge operation not found, not pending, or not scheduled");
+      }
+
+      // Create comprehensive audit log for starting the purge
+      await this.createAuditLog({
+        tenantId: tenantId,
+        targetTable: "purge_operations",
+        targetId: purgeId,
+        action: "start_purge",
+        actor: null,
+        actorType: "system",
+        reason: "Purge operation started after security verification",
+        metadata: {
+          scheduledAt: purgeOperation.scheduledAt,
+          securityContext: {
+            featureFlagVerified: true,
+            exportAcknowledged: true,
+            authorizationChain: 'complete'
+          },
+          timestamp: new Date().toISOString(),
+          severity: 'CRITICAL'
+        }
+      });
+
+      return purgeOperation;
+    } catch (error) {
+      console.error("Failed to start purge:", error);
+      throw error;
+    }
+  }
+
+  // Complete purge operation
+  async completePurge(
+    purgeId: string,
+    tenantId: string,
+    recordsDestroyed: number,
+    tablesDestroyed: number
+  ): Promise<PurgeOperation> {
+    try {
+      const [purgeOperation] = await db
+        .update(purgeOperations)
+        .set({
+          status: "finished",
+          completedAt: new Date(),
+          recordsDestroyed: recordsDestroyed,
+          tablesDestroyed: tablesDestroyed,
+        })
+        .where(
+          and(
+            eq(purgeOperations.id, purgeId),
+            eq(purgeOperations.tenantId, tenantId),
+            eq(purgeOperations.status, "running")
+          )
+        )
+        .returning();
+
+      if (!purgeOperation) {
+        throw new Error("Purge operation not found or not running");
+      }
+
+      // Create audit log
+      await this.createAuditLog({
+        tenantId: tenantId,
+        targetTable: "purge_operations",
+        targetId: purgeId,
+        action: "complete_purge",
+        actor: null,
+        actorType: "system",
+        reason: "Purge execution completed",
+        metadata: {
+          recordsDestroyed,
+          tablesDestroyed,
+        },
+      });
+
+      return purgeOperation;
+    } catch (error) {
+      console.error("Failed to complete purge:", error);
+      throw error;
+    }
+  }
+
+  // Mark purge as failed
+  async failPurge(purgeId: string, tenantId: string, errorMessage: string): Promise<PurgeOperation> {
+    try {
+      const [purgeOperation] = await db
+        .update(purgeOperations)
+        .set({
+          status: "failed",
+          failedAt: new Date(),
+          errorMessage: errorMessage,
+        })
+        .where(
+          and(
+            eq(purgeOperations.id, purgeId),
+            eq(purgeOperations.tenantId, tenantId),
+            eq(purgeOperations.status, "running")
+          )
+        )
+        .returning();
+
+      if (!purgeOperation) {
+        throw new Error("Purge operation not found or not running");
+      }
+
+      // Create audit log
+      await this.createAuditLog({
+        tenantId: tenantId,
+        targetTable: "purge_operations",
+        targetId: purgeId,
+        action: "fail_purge",
+        actor: null,
+        actorType: "system",
+        reason: "Purge execution failed",
+        metadata: {
+          errorMessage,
+        },
+      });
+
+      return purgeOperation;
+    } catch (error) {
+      console.error("Failed to fail purge:", error);
+      throw error;
+    }
+  }
+
+  // EXTREMELY DANGEROUS: Execute purge immediately
+  async purgeTenantNow(tenantId: string, purgeId: string): Promise<{ recordsDestroyed: number; tablesDestroyed: number }> {
+    console.warn(`🔥 DANGER PURGE EXECUTING FOR TENANT: ${tenantId} 🔥`);
+    
+    try {
+      // DEFENSE-IN-DEPTH: Final security check before permanent destruction
+      const featureFlags = await this.getTenantFeatureFlags(tenantId);
+      if (!featureFlags['danger_purge']) {
+        console.error(`🚨 SECURITY BLOCK: Attempted to execute purge on tenant ${tenantId} with disabled danger_purge feature`);
+        throw new Error("CRITICAL: Danger purge feature is not enabled for this tenant - aborting destruction");
+      }
+      
+      console.warn(`🚨 FINAL SECURITY CHECK PASSED: danger_purge enabled for tenant ${tenantId}`);
+      
+      return await db.transaction(async (tx) => {
+        let recordsDestroyed = 0;
+        let tablesDestroyed = 0;
+
+        // STEP 1: Revoke all tenant encryption keys first
+        await tx
+          .update(tenantKeys)
+          .set({
+            status: "revoked",
+            revokedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(tenantKeys.tenantId, tenantId),
+              eq(tenantKeys.status, "active")
+            )
+          );
+
+        // STEP 2: Get record counts before deletion
+        const tables = [
+          { table: products, name: "products" },
+          { table: batches, name: "batches" },
+          { table: inventoryLots, name: "inventory_lots" },
+          { table: customers, name: "customers" },
+          { table: orders, name: "orders" },
+          { table: orderItems, name: "order_items" },
+          { table: loyaltyAccounts, name: "loyalty_accounts" },
+          { table: credits, name: "credits" },
+          { table: creditTransactions, name: "credit_transactions" },
+          { table: payments, name: "payments" },
+          { table: deliveries, name: "deliveries" },
+          { table: kbArticles, name: "kb_articles" },
+          { table: kbFeedback, name: "kb_feedback" },
+          { table: featureFlagOverrides, name: "feature_flag_overrides" },
+          { table: selfDestructs, name: "self_destructs" },
+          { table: usersTenants, name: "users_tenants" },
+          { table: tenantKeys, name: "tenant_keys" },
+        ];
+
+        for (const { table, name } of tables) {
+          try {
+            const count = await tx
+              .select({ count: sql`count(*)` })
+              .from(table)
+              .where(eq((table as any).tenantId, tenantId));
+            recordsDestroyed += Number(count[0]?.count || 0);
+            if (Number(count[0]?.count || 0) > 0) {
+              tablesDestroyed++;
+            }
+          } catch (error) {
+            console.error(`Error counting records in ${name}:`, error);
+          }
+        }
+
+        // STEP 3: Delete the tenant (CASCADE will delete all related records)
+        const deletedTenants = await tx
+          .delete(tenants)
+          .where(eq(tenants.id, tenantId))
+          .returning();
+
+        if (deletedTenants.length === 0) {
+          throw new Error("Tenant not found or already deleted");
+        }
+
+        console.error(`💥 PURGE COMPLETED: ${recordsDestroyed} records destroyed across ${tablesDestroyed} tables`);
+        
+        return { recordsDestroyed, tablesDestroyed };
+      });
+    } catch (error) {
+      console.error("Failed to execute purge:", error);
+      throw error;
+    }
+  }
+
+  // Get purge operations with user details
+  async getPurgeOperations(filters?: { tenantId?: string; status?: string }): Promise<Array<PurgeOperation & {
+    requestedByName?: string;
+    canceledByName?: string;
+  }>> {
+    try {
+      let query = db
+        .select({
+          id: purgeOperations.id,
+          tenantId: purgeOperations.tenantId,
+          tenantName: purgeOperations.tenantName,
+          status: purgeOperations.status,
+          requestedBy: purgeOperations.requestedBy,
+          requestedAt: purgeOperations.requestedAt,
+          exportAckedAt: purgeOperations.exportAckedAt,
+          scheduledAt: purgeOperations.scheduledAt,
+          startedAt: purgeOperations.startedAt,
+          completedAt: purgeOperations.completedAt,
+          canceledAt: purgeOperations.canceledAt,
+          failedAt: purgeOperations.failedAt,
+          canceledBy: purgeOperations.canceledBy,
+          reason: purgeOperations.reason,
+          confirmationToken: purgeOperations.confirmationToken,
+          ipAddress: purgeOperations.ipAddress,
+          userAgent: purgeOperations.userAgent,
+          errorMessage: purgeOperations.errorMessage,
+          recordsDestroyed: purgeOperations.recordsDestroyed,
+          tablesDestroyed: purgeOperations.tablesDestroyed,
+          metadata: purgeOperations.metadata,
+          requestedByName: sql<string>`req_users.first_name || ' ' || req_users.last_name`,
+          canceledByName: sql<string>`cancel_users.first_name || ' ' || cancel_users.last_name`,
+        })
+        .from(purgeOperations)
+        .leftJoin(sql`users req_users`, eq(purgeOperations.requestedBy, sql`req_users.id`))
+        .leftJoin(sql`users cancel_users`, eq(purgeOperations.canceledBy, sql`cancel_users.id`))
+        .orderBy(desc(purgeOperations.requestedAt));
+
+      if (filters?.tenantId) {
+        query = query.where(eq(purgeOperations.tenantId, filters.tenantId));
+      }
+
+      if (filters?.status) {
+        query = query.where(eq(purgeOperations.status, filters.status as any));
+      }
+
+      const results = await query;
+      
+      return results as Array<PurgeOperation & {
+        requestedByName?: string;
+        canceledByName?: string;
+      }>;
+    } catch (error) {
+      console.error("Failed to get purge operations:", error);
       throw error;
     }
   }

@@ -58,7 +58,8 @@ export const paymentMethodEnum = pgEnum("payment_method", ["card", "cash", "cust
 export const kbCategoryEnum = pgEnum("kb_category", ["getting_started", "features", "troubleshooting", "billing", "api", "integrations", "other"]);
 export const keyStatusEnum = pgEnum("key_status", ["active", "revoked"]);
 export const selfDestructStatusEnum = pgEnum("self_destruct_status", ["armed", "disarmed", "destroyed"]);
-export const auditActionEnum = pgEnum("audit_action", ["create", "update", "delete", "arm_self_destruct", "disarm_self_destruct", "destroy_self_destruct", "sweeper_destroy"]);
+export const purgeStatusEnum = pgEnum("purge_status", ["pending", "running", "finished", "failed", "canceled"]);
+export const auditActionEnum = pgEnum("audit_action", ["create", "update", "delete", "arm_self_destruct", "disarm_self_destruct", "destroy_self_destruct", "sweeper_destroy", "request_purge", "ack_export", "schedule_purge", "cancel_purge", "start_purge", "complete_purge", "fail_purge"]);
 
 // Tenants
 export const tenants = pgTable("tenants", {
@@ -473,6 +474,38 @@ export const auditLogs = pgTable("audit_logs", {
   index("idx_audit_logs_created").on(table.createdAt),
 ]);
 
+// Danger Purge Operations - EXTREMELY SENSITIVE
+export const purgeOperations = pgTable("purge_operations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  tenantName: varchar("tenant_name", { length: 255 }).notNull(), // Snapshot for confirmation
+  status: purgeStatusEnum("status").notNull().default("pending"),
+  requestedBy: varchar("requested_by").notNull().references(() => users.id),
+  requestedAt: timestamp("requested_at").defaultNow(),
+  exportAckedAt: timestamp("export_acked_at"),
+  scheduledAt: timestamp("scheduled_at"), // When to execute
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+  canceledAt: timestamp("canceled_at"),
+  failedAt: timestamp("failed_at"),
+  canceledBy: varchar("canceled_by").references(() => users.id),
+  reason: text("reason").notNull(),
+  confirmationToken: varchar("confirmation_token", { length: 64 }), // For OTP verification
+  ipAddress: varchar("ip_address", { length: 45 }), // IPv4/IPv6
+  userAgent: text("user_agent"),
+  errorMessage: text("error_message"), // If failed
+  recordsDestroyed: integer("records_destroyed").default(0),
+  tablesDestroyed: integer("tables_destroyed").default(0),
+  metadata: jsonb("metadata"), // Additional tracking data
+}, (table) => [
+  index("idx_purge_operations_tenant").on(table.tenantId),
+  index("idx_purge_operations_status").on(table.status),
+  index("idx_purge_operations_scheduled").on(table.scheduledAt),
+  index("idx_purge_operations_requested").on(table.requestedBy),
+  // CRITICAL: Prevent concurrent purges per tenant
+  unique("unique_active_purge_per_tenant").on(table.tenantId, table.status),
+]);
+
 // Relations
 export const usersRelations = relations(users, ({ many, one }) => ({
   usersTenants: many(usersTenants),
@@ -647,6 +680,8 @@ export type SelfDestruct = typeof selfDestructs.$inferSelect;
 export type InsertSelfDestruct = typeof selfDestructs.$inferInsert;
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type InsertAuditLog = typeof auditLogs.$inferInsert;
+export type PurgeOperation = typeof purgeOperations.$inferSelect;
+export type InsertPurgeOperation = typeof purgeOperations.$inferInsert;
 
 // Zod schemas
 export const insertUserSchema = createInsertSchema(users).omit({
@@ -725,4 +760,17 @@ export const insertSelfDestructSchema = createInsertSchema(selfDestructs).omit({
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({
   id: true,
   createdAt: true,
+});
+
+export const insertPurgeOperationSchema = createInsertSchema(purgeOperations).omit({
+  id: true,
+  requestedAt: true,
+  exportAckedAt: true,
+  scheduledAt: true,
+  startedAt: true,
+  completedAt: true,
+  canceledAt: true,
+  failedAt: true,
+  recordsDestroyed: true,
+  tablesDestroyed: true,
 });

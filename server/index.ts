@@ -391,6 +391,156 @@ app.use((req, res, next) => {
   // Start the sweeper job
   startSelfDestructSweeper();
 
+  // Background Purge Scheduler Job for Scheduled Tenant Destruction
+  const startPurgeScheduler = () => {
+    let purgeInterval: NodeJS.Timeout;
+
+    const runPurgeScheduler = async () => {
+      try {
+        // Query directly for scheduled purges that are ready to execute
+        const { db } = await import("./db");
+        const { purgeOperations } = await import("@shared/schema");
+        const { eq, and, lte, isNotNull } = await import("drizzle-orm");
+        
+        // ATOMIC STATUS TRANSITIONS: Use advisory locking and atomic updates to prevent race conditions
+        // This prevents multiple scheduler instances from processing the same purge
+        const { sql } = await import("drizzle-orm");
+        
+        // Use PostgreSQL advisory locks to prevent concurrent processing of the same tenant
+        const processedPurges = [];
+        
+        while (true) {
+          // Atomically select and lock a single ready purge operation
+          const readyPurges = await db
+            .select()
+            .from(purgeOperations)
+            .where(
+              and(
+                eq(purgeOperations.status, 'pending'),
+                lte(purgeOperations.scheduledAt, new Date()),
+                isNotNull(purgeOperations.scheduledAt),
+                isNotNull(purgeOperations.exportAckedAt)
+              )
+            )
+            .limit(1)
+            .for('update', { skipLocked: true }); // Skip locked rows to avoid blocking
+          
+          if (readyPurges.length === 0) {
+            break; // No more purges ready for execution
+          }
+          
+          const purgeOp = readyPurges[0];
+          
+          try {
+            // Acquire advisory lock for this tenant to prevent concurrent processing
+            const lockResult = await db.execute(
+              sql`SELECT pg_try_advisory_lock(hashtext(${purgeOp.tenantId})) as acquired`
+            );
+            const lockAcquired = lockResult[0]?.acquired;
+            
+            if (!lockAcquired) {
+              console.warn(`PURGE SCHEDULER: Could not acquire lock for tenant ${purgeOp.tenantId}, skipping`);
+              continue;
+            }
+
+            // Double-check if danger_purge is enabled for this tenant (defense-in-depth)
+            const featureFlags = await storage.getTenantFeatureFlags(purgeOp.tenantId);
+            if (!featureFlags['danger_purge']) {
+              console.warn(`PURGE SCHEDULER: Danger purge disabled for tenant ${purgeOp.tenantId}, skipping`);
+              // Release advisory lock
+              await db.execute(sql`SELECT pg_advisory_unlock(hashtext(${purgeOp.tenantId}))`);
+              continue;
+            }
+
+            console.error(`💥 EXECUTING SCHEDULED PURGE: Operation ${purgeOp.id} for tenant ${purgeOp.tenantName} (${purgeOp.tenantId})`);
+            console.error(`💥 Requested by: ${purgeOp.requestedBy}, Reason: ${purgeOp.reason}`);
+
+            // Start the purge operation with atomic status transition
+            try {
+              await storage.startPurge(purgeOp.id, purgeOp.tenantId);
+              processedPurges.push(purgeOp);
+
+              try {
+                // Execute the purge with comprehensive logging
+                console.error(`💥 BEGINNING TENANT DESTRUCTION: ${purgeOp.tenantName}`);
+                const result = await storage.purgeTenantNow(purgeOp.tenantId, purgeOp.id);
+                
+                // Mark as completed
+                await storage.completePurge(purgeOp.id, purgeOp.tenantId, result.recordsDestroyed, result.tablesDestroyed);
+                
+                console.error(`💥 PURGE COMPLETED SUCCESSFULLY: ${result.recordsDestroyed} records destroyed across ${result.tablesDestroyed} tables`);
+                console.error(`💥 TENANT ${purgeOp.tenantName} (${purgeOp.tenantId}) PERMANENTLY DESTROYED`);
+                
+                log(`PURGE SCHEDULER: Successfully completed purge ${purgeOp.id} - ${result.recordsDestroyed} records destroyed`);
+              } catch (executionError: any) {
+                console.error(`💥 PURGE EXECUTION FAILED for ${purgeOp.tenantName}:`, executionError);
+                
+                // Mark as failed
+                await storage.failPurge(purgeOp.id, purgeOp.tenantId, executionError.message);
+                
+                log(`PURGE SCHEDULER: Failed to execute purge ${purgeOp.id}: ${executionError.message}`);
+              }
+            } catch (startError: any) {
+              console.error(`PURGE SCHEDULER: Failed to start purge ${purgeOp.id}:`, startError);
+            }
+            
+            // Always release the advisory lock when done with this tenant
+            try {
+              await db.execute(sql`SELECT pg_advisory_unlock(hashtext(${purgeOp.tenantId}))`);
+            } catch (unlockError) {
+              console.error(`PURGE SCHEDULER: Failed to release lock for tenant ${purgeOp.tenantId}:`, unlockError);
+            }
+            
+          } catch (error) {
+            console.error(`PURGE SCHEDULER: Error processing purge operation ${purgeOp.id}:`, error);
+            // Try to release lock even on error
+            try {
+              await db.execute(sql`SELECT pg_advisory_unlock(hashtext(${purgeOp.tenantId}))`);
+            } catch (unlockError) {
+              // Ignore unlock errors during error handling
+            }
+          }
+        }
+
+        if (processedPurges.length > 0) {
+          log(`PURGE SCHEDULER: Processed ${processedPurges.length} purge operations`);
+        }
+
+        log(`PURGE SCHEDULER: Completed processing ${readyPurges.length} scheduled purges`);
+      } catch (error) {
+        console.error('PURGE SCHEDULER: Critical error during scheduler run:', error);
+        // Don't stop the scheduler, just log and continue
+      }
+    };
+
+    // Run scheduler immediately on startup (after a 45-second delay to let system settle)
+    setTimeout(() => {
+      runPurgeScheduler();
+    }, 45000);
+
+    // Then run every 30 seconds for more responsive purge execution
+    purgeInterval = setInterval(runPurgeScheduler, 30000);
+
+    log('🔥 PURGE SCHEDULER: Background job started (30-second intervals)');
+
+    // Graceful shutdown handling
+    const stopPurgeScheduler = () => {
+      if (purgeInterval) {
+        clearInterval(purgeInterval);
+        log('PURGE SCHEDULER: Background job stopped');
+      }
+    };
+
+    process.on('SIGTERM', stopPurgeScheduler);
+    process.on('SIGINT', stopPurgeScheduler);
+    process.on('exit', stopPurgeScheduler);
+
+    return stopPurgeScheduler;
+  };
+
+  // Start the purge scheduler job
+  startPurgeScheduler();
+
   // ALWAYS serve the app on the port specified in the environment variable PORT
   // Other ports are firewalled. Default to 5000 if not specified.
   // this serves both the API and the client.

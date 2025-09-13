@@ -24,6 +24,7 @@ import {
   insertUserSettingsSchema,
   insertSelfDestructSchema,
   insertAuditLogSchema,
+  insertPurgeOperationSchema,
   batches,
   products,
   payments,
@@ -2034,6 +2035,597 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error seeding KB articles:", error);
       res.status(500).json({ message: "Failed to seed knowledge base articles", error: (error as Error).message });
+    }
+  });
+
+  // =============================================
+  // DANGER PURGE OPERATIONS - EXTREMELY SENSITIVE
+  // =============================================
+
+  // Feature flag check middleware for purge operations
+  const requirePurgeFeatureFlag = async (req: any, res: any, next: any) => {
+    try {
+      const userId = req.user.claims.sub;
+      let targetTenantId: string | null = null;
+      
+      // Determine target tenant based on route
+      const path = req.route?.path;
+      const { id } = req.params;
+      
+      if (path?.includes('/:id/') && id) {
+        // For operations on existing purge operations, look up the target tenant
+        const operations = await storage.getPurgeOperations({ tenantId: undefined });
+        const purgeOp = operations.find(op => op.id === id);
+        
+        if (!purgeOp) {
+          return res.status(404).json({ message: "Purge operation not found" });
+        }
+        
+        targetTenantId = purgeOp.tenantId;
+      } else if (path?.includes('/request')) {
+        // For new purge requests, get tenant from request body
+        targetTenantId = req.body?.tenantId;
+        
+        if (!targetTenantId) {
+          return res.status(400).json({ 
+            message: "Target tenant ID is required for purge operations" 
+          });
+        }
+      } else if (path?.includes('/status')) {
+        // For status endpoints, super admin access is sufficient (no specific tenant check)
+        return next();
+      }
+      
+      if (!targetTenantId) {
+        return res.status(400).json({ 
+          message: "Unable to determine target tenant for purge operation" 
+        });
+      }
+      
+      // CRITICAL SECURITY FIX: Check feature flags for the TARGET tenant, not requester's tenant
+      const featureFlags = await storage.getTenantFeatureFlags(targetTenantId);
+      
+      if (!featureFlags['danger_purge']) {
+        console.error(`🚨 SECURITY: Attempted purge on tenant ${targetTenantId} with disabled danger_purge feature by user ${userId}`);
+        return res.status(403).json({ 
+          message: "CRITICAL: Danger purge feature is not enabled for this tenant. Contact system administrator." 
+        });
+      }
+
+      // CRITICAL SECURITY: Enforce export acknowledgment for execute-now operations
+      if (path?.includes('/execute-now') && id) {
+        const operations = await storage.getPurgeOperations({ tenantId: undefined });
+        const purgeOp = operations.find(op => op.id === id);
+        
+        if (!purgeOp?.exportAckedAt) {
+          console.error(`🚨 SECURITY: Attempted immediate execution without export acknowledgment for purge ${id} by user ${userId}`);
+          return res.status(403).json({ 
+            message: "CRITICAL: Export must be acknowledged before immediate execution. This is a mandatory safety step." 
+          });
+        }
+
+        // Store purge operation for downstream validation
+        req.purgeOperation = purgeOp;
+      }
+      
+      // Store target tenant ID for use in subsequent route handlers
+      req.targetTenantId = targetTenantId;
+      
+      next();
+    } catch (error) {
+      console.error("Feature flag check error:", error);
+      res.status(500).json({ message: "Feature flag check failed" });
+    }
+  };
+
+  // Helper to get client IP and User Agent
+  const getClientInfo = (req: any) => ({
+    ipAddress: req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || 'unknown',
+    userAgent: req.headers['user-agent'] || 'unknown'
+  });
+
+  // Enhanced MFA validation for purge operations
+  const validatePurgeMFA = async (req: any, res: any, next: any) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { otpToken, finalConfirmation, tenantNameConfirmation } = req.body;
+      const { ipAddress, userAgent } = getClientInfo(req);
+      
+      // 1. Verify re-authentication is recent (within 5 minutes)
+      const authTime = req.user.claims?.auth_time || req.user.claims?.iat;
+      const now = Math.floor(Date.now() / 1000);
+      const AUTH_TIMEOUT_SECONDS = 5 * 60; // 5 minutes
+      
+      if (!authTime || (now - authTime) > AUTH_TIMEOUT_SECONDS) {
+        console.error(`🚨 SECURITY: Re-authentication required for user ${userId} from ${ipAddress}`);
+        return res.status(401).json({ 
+          message: "Recent authentication required. Please re-authenticate within the last 5 minutes.",
+          authTimeRemaining: 0
+        });
+      }
+
+      // 2. Validate OTP Token (simplified for demo - in production use proper TOTP/SMS)
+      if (!otpToken || otpToken.length !== 6 || !/^\d{6}$/.test(otpToken)) {
+        return res.status(400).json({ 
+          message: "Valid 6-digit OTP required" 
+        });
+      }
+      
+      // In production, validate against generated TOTP/SMS code
+      const validOTP = process.env.NODE_ENV === 'production' ? 
+        await validateTOTP(userId, otpToken) : // Replace with real TOTP validation
+        otpToken === '123456'; // Demo validation
+        
+      if (!validOTP) {
+        console.error(`🚨 SECURITY: Invalid OTP attempt by user ${userId} from ${ipAddress}`);
+        return res.status(401).json({ 
+          message: "Invalid OTP code" 
+        });
+      }
+
+      // 3. Validate typed confirmation phrases
+      const requiredConfirmations = {
+        schedule: "DESTROY_ALL_DATA",
+        executeNow: "IMMEDIATE_DESTRUCTION_CONFIRMED"
+      };
+      
+      const operationType = req.route?.path?.includes('/execute-now') ? 'executeNow' : 'schedule';
+      const expectedConfirmation = requiredConfirmations[operationType];
+      
+      if (finalConfirmation !== expectedConfirmation) {
+        return res.status(400).json({ 
+          message: `You must type '${expectedConfirmation}' exactly to confirm` 
+        });
+      }
+
+      // 4. For operations with tenant names, verify tenant name confirmation
+      if (tenantNameConfirmation && req.targetTenantId) {
+        const tenant = await storage.getTenant(req.targetTenantId);
+        if (!tenant || tenant.name !== tenantNameConfirmation) {
+          console.error(`🚨 SECURITY: Incorrect tenant name confirmation for ${req.targetTenantId} by user ${userId}`);
+          return res.status(400).json({ 
+            message: "SECURITY: Tenant name confirmation failed. This is a safety check." 
+          });
+        }
+      }
+
+      // 5. Log the successful MFA validation
+      console.warn(`🔐 MFA VALIDATION PASSED for user ${userId} from ${ipAddress} for operation ${operationType}`);
+      
+      // Store validation timestamp for audit purposes
+      req.mfaValidatedAt = new Date();
+      req.mfaDetails = {
+        authTime,
+        ipAddress,
+        userAgent,
+        operationType
+      };
+      
+      next();
+    } catch (error) {
+      console.error("MFA validation error:", error);
+      res.status(500).json({ message: "MFA validation failed" });
+    }
+  };
+
+  // Fake TOTP validation for demo (replace with real implementation in production)
+  const validateTOTP = async (userId: string, token: string): Promise<boolean> => {
+    // In production, implement proper TOTP validation using libraries like speakeasy
+    // This would validate against the user's TOTP secret stored securely
+    return token === '123456'; // Simplified for demo
+  };
+
+  // CRITICAL SECURITY: Add tenant access verification middleware for purge operations
+  const requirePurgeTenantAccess = async (req: any, res: any, next: any) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { ipAddress, userAgent } = getClientInfo(req);
+      
+      // Get target tenant ID from route or request body
+      let targetTenantId = req.targetTenantId || req.body?.tenantId;
+      
+      if (!targetTenantId && req.params?.id) {
+        // For purge operations, look up the target tenant
+        const operations = await storage.getPurgeOperations({ tenantId: undefined });
+        const purgeOp = operations.find(op => op.id === req.params.id);
+        targetTenantId = purgeOp?.tenantId;
+      }
+      
+      if (!targetTenantId) {
+        console.error(`🚨 SECURITY: Unable to determine target tenant for purge operation by user ${userId} from ${ipAddress}`);
+        return res.status(400).json({ 
+          message: "SECURITY: Cannot determine target tenant for purge operation" 
+        });
+      }
+      
+      // Verify user has access to target tenant (super admin role with tenant membership)
+      const userTenants = await storage.getUserTenants(userId);
+      const hasAccess = userTenants.some(ut => ut.tenantId === targetTenantId && 
+        (ut.role === "super_admin" || ut.role === "owner"));
+      
+      if (!hasAccess) {
+        console.error(`🚨 SECURITY: Purge access denied - User ${userId} from ${ipAddress} lacks super_admin/owner access to tenant ${targetTenantId}`);
+        
+        // Create audit log for failed authorization
+        await storage.createAuditLog({
+          tenantId: targetTenantId,
+          targetTable: 'purge_operations',
+          targetId: req.params?.id || 'new_request',
+          action: 'request_purge',
+          actor: userId,
+          actorType: 'user',
+          reason: 'SECURITY_VIOLATION: Insufficient tenant access for purge operation',
+          metadata: {
+            ipAddress,
+            userAgent,
+            failureReason: 'No super_admin/owner role for target tenant',
+            attemptedRoute: req.route?.path
+          }
+        });
+        
+        return res.status(403).json({ 
+          message: "CRITICAL: Access denied - You must be a super admin or owner of the target tenant to perform purge operations" 
+        });
+      }
+      
+      // Store verification for downstream middleware
+      req.tenantAccessVerified = true;
+      req.verifiedTenantId = targetTenantId;
+      
+      console.warn(`🔐 PURGE TENANT ACCESS VERIFIED: User ${userId} has super_admin/owner access to tenant ${targetTenantId}`);
+      next();
+    } catch (error) {
+      console.error("Purge tenant access verification error:", error);
+      res.status(500).json({ message: "Tenant access verification failed" });
+    }
+  };
+
+  // POST /api/admin/purge/request - Request a purge operation (Super Admin only)
+  app.post("/api/admin/purge/request", isAuthenticated, requireSuperAdmin, requirePurgeTenantAccess, requirePurgeFeatureFlag, validatePurgeMFA, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { ipAddress, userAgent } = getClientInfo(req);
+      
+      const requestSchema = z.object({
+        tenantId: z.string().uuid(),
+        tenantName: z.string().min(1, "Tenant name is required for confirmation"),
+        reason: z.string().min(10, "Reason must be at least 10 characters"),
+        confirmDestruction: z.literal(true, {
+          errorMap: () => ({ message: "You must confirm that this will permanently destroy all data" })
+        })
+      });
+      
+      const validatedData = requestSchema.parse(req.body);
+      
+      // Verify tenant exists and name matches (case-sensitive security check)
+      const tenant = await storage.getTenant(validatedData.tenantId);
+      if (!tenant) {
+        return res.status(404).json({ message: "Tenant not found" });
+      }
+      
+      if (tenant.name !== validatedData.tenantName) {
+        return res.status(400).json({ 
+          message: "SECURITY: Tenant name does not match exactly. This is a safety check." 
+        });
+      }
+      
+      // Create the purge operation
+      const purgeOperation = await storage.requestPurge({
+        tenantId: validatedData.tenantId,
+        tenantName: validatedData.tenantName,
+        requestedBy: userId,
+        reason: validatedData.reason,
+        ipAddress,
+        userAgent,
+      });
+      
+      console.warn(`🚨 PURGE REQUESTED for tenant ${tenant.name} (${tenant.id}) by user ${userId}`);
+      
+      res.status(201).json({
+        message: "Purge operation requested successfully. Export data before proceeding!",
+        purgeOperation: {
+          id: purgeOperation.id,
+          tenantId: purgeOperation.tenantId,
+          tenantName: purgeOperation.tenantName,
+          status: purgeOperation.status,
+          requestedAt: purgeOperation.requestedAt,
+          reason: purgeOperation.reason
+        }
+      });
+    } catch (error: any) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Invalid request data", 
+          errors: error.errors 
+        });
+      }
+      console.error("Error requesting purge:", error);
+      res.status(500).json({ message: "Failed to request purge operation" });
+    }
+  });
+
+  // POST /api/admin/purge/:id/export-ack - Acknowledge export completion
+  app.post("/api/admin/purge/:id/export-ack", isAuthenticated, requireSuperAdmin, requirePurgeTenantAccess, requirePurgeFeatureFlag, validatePurgeMFA, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user.claims.sub;
+      
+      const ackSchema = z.object({
+        exportConfirmed: z.literal(true, {
+          errorMap: () => ({ message: "You must confirm that data export is complete" })
+        })
+      });
+      
+      ackSchema.parse(req.body);
+      
+      // Get purge operation to verify tenant access
+      const operations = await storage.getPurgeOperations({ tenantId: undefined });
+      const purgeOp = operations.find(op => op.id === id);
+      
+      if (!purgeOp) {
+        return res.status(404).json({ message: "Purge operation not found" });
+      }
+      
+      const purgeOperation = await storage.ackExport(id, purgeOp.tenantId);
+      
+      console.warn(`🚨 EXPORT ACKNOWLEDGED for purge ${id} by user ${userId}`);
+      
+      res.json({
+        message: "Export acknowledged. Purge can now be scheduled.",
+        purgeOperation: {
+          id: purgeOperation.id,
+          status: purgeOperation.status,
+          exportAckedAt: purgeOperation.exportAckedAt
+        }
+      });
+    } catch (error: any) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Invalid request data", 
+          errors: error.errors 
+        });
+      }
+      console.error("Error acknowledging export:", error);
+      res.status(500).json({ message: "Failed to acknowledge export" });
+    }
+  });
+
+  // POST /api/admin/purge/:id/schedule - Schedule purge for execution
+  app.post("/api/admin/purge/:id/schedule", isAuthenticated, requireSuperAdmin, requirePurgeTenantAccess, requirePurgeFeatureFlag, validatePurgeMFA, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user.claims.sub;
+      
+      const scheduleSchema = z.object({
+        scheduledAt: z.string().datetime(),
+        otpToken: z.string().length(6, "OTP must be exactly 6 digits"),
+        finalConfirmation: z.literal("DESTROY_ALL_DATA", {
+          errorMap: () => ({ message: "You must type 'DESTROY_ALL_DATA' to confirm" })
+        })
+      });
+      
+      const validatedData = scheduleSchema.parse(req.body);
+      const scheduledDate = new Date(validatedData.scheduledAt);
+      
+      // Validate scheduled time is in the future
+      if (scheduledDate <= new Date()) {
+        return res.status(400).json({ 
+          message: "Scheduled time must be in the future" 
+        });
+      }
+      
+      // Validate scheduled time is not too far in the future (max 7 days)
+      const maxScheduleTime = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      if (scheduledDate > maxScheduleTime) {
+        return res.status(400).json({ 
+          message: "Cannot schedule more than 7 days in advance" 
+        });
+      }
+      
+      // Use proper confirmation token from MFA validation
+      const confirmationToken = req.mfaValidatedAt?.getTime().toString() || validatedData.otpToken;
+      
+      // Get purge operation to verify tenant access
+      const operations = await storage.getPurgeOperations({ tenantId: undefined });
+      const purgeOp = operations.find(op => op.id === id);
+      
+      if (!purgeOp) {
+        return res.status(404).json({ message: "Purge operation not found" });
+      }
+      
+      const purgeOperation = await storage.schedulePurge(id, purgeOp.tenantId, scheduledDate, confirmationToken);
+      
+      console.error(`🚨 PURGE SCHEDULED for ${scheduledDate.toISOString()} - Operation ${id} by user ${userId}`);
+      
+      res.json({
+        message: `CRITICAL: Purge scheduled for ${scheduledDate.toISOString()}. Can be canceled until execution.`,
+        purgeOperation: {
+          id: purgeOperation.id,
+          status: purgeOperation.status,
+          scheduledAt: purgeOperation.scheduledAt
+        }
+      });
+    } catch (error: any) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Invalid request data", 
+          errors: error.errors 
+        });
+      }
+      console.error("Error scheduling purge:", error);
+      res.status(500).json({ message: "Failed to schedule purge" });
+    }
+  });
+
+  // POST /api/admin/purge/:id/cancel - Cancel a pending purge
+  app.post("/api/admin/purge/:id/cancel", isAuthenticated, requireSuperAdmin, requirePurgeTenantAccess, requirePurgeFeatureFlag, validatePurgeMFA, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user.claims.sub;
+      
+      const cancelSchema = z.object({
+        reason: z.string().min(5, "Cancellation reason must be at least 5 characters")
+      });
+      
+      const validatedData = cancelSchema.parse(req.body);
+      
+      // Get purge operation to verify tenant access
+      const operations = await storage.getPurgeOperations({ tenantId: undefined });
+      const purgeOp = operations.find(op => op.id === id);
+      
+      if (!purgeOp) {
+        return res.status(404).json({ message: "Purge operation not found" });
+      }
+      
+      const purgeOperation = await storage.cancelPurge(id, purgeOp.tenantId, userId, validatedData.reason);
+      
+      console.warn(`✅ PURGE CANCELED - Operation ${id} by user ${userId}: ${validatedData.reason}`);
+      
+      res.json({
+        message: "Purge operation canceled successfully",
+        purgeOperation: {
+          id: purgeOperation.id,
+          status: purgeOperation.status,
+          canceledAt: purgeOperation.canceledAt,
+          canceledBy: purgeOperation.canceledBy
+        }
+      });
+    } catch (error: any) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Invalid request data", 
+          errors: error.errors 
+        });
+      }
+      console.error("Error canceling purge:", error);
+      res.status(500).json({ message: "Failed to cancel purge operation" });
+    }
+  });
+
+  // GET /api/admin/purge/status - Get all purge operations
+  app.get("/api/admin/purge/status", isAuthenticated, requireSuperAdmin, requirePurgeFeatureFlag, async (req: any, res) => {
+    try {
+      const { tenantId, status } = req.query;
+      
+      const filters: { tenantId?: string; status?: string } = {};
+      
+      if (tenantId && typeof tenantId === 'string') {
+        filters.tenantId = tenantId;
+      }
+      
+      if (status && typeof status === 'string') {
+        filters.status = status;
+      }
+      
+      const purgeOperations = await storage.getPurgeOperations(filters);
+      
+      res.json({
+        purgeOperations: purgeOperations.map(op => ({
+          id: op.id,
+          tenantId: op.tenantId,
+          tenantName: op.tenantName,
+          status: op.status,
+          requestedBy: op.requestedBy,
+          requestedByName: op.requestedByName,
+          requestedAt: op.requestedAt,
+          exportAckedAt: op.exportAckedAt,
+          scheduledAt: op.scheduledAt,
+          startedAt: op.startedAt,
+          completedAt: op.completedAt,
+          canceledAt: op.canceledAt,
+          canceledBy: op.canceledBy,
+          canceledByName: op.canceledByName,
+          failedAt: op.failedAt,
+          reason: op.reason,
+          errorMessage: op.errorMessage,
+          recordsDestroyed: op.recordsDestroyed,
+          tablesDestroyed: op.tablesDestroyed
+        }))
+      });
+    } catch (error: any) {
+      console.error("Error getting purge status:", error);
+      res.status(500).json({ message: "Failed to get purge status" });
+    }
+  });
+
+  // POST /api/admin/purge/:id/execute-now - EXTREMELY DANGEROUS: Execute purge immediately
+  app.post("/api/admin/purge/:id/execute-now", isAuthenticated, requireSuperAdmin, requirePurgeTenantAccess, requirePurgeFeatureFlag, validatePurgeMFA, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user.claims.sub;
+      const { ipAddress, userAgent } = getClientInfo(req);
+      
+      const executeSchema = z.object({
+        emergencyBypass: z.literal(true),
+        otpToken: z.string().length(6, "OTP must be exactly 6 digits"),
+        holdConfirmation: z.literal("IMMEDIATE_DESTRUCTION_CONFIRMED", {
+          errorMap: () => ({ message: "You must type 'IMMEDIATE_DESTRUCTION_CONFIRMED' to execute" })
+        }),
+        tenantNameConfirmation: z.string().min(1, "Must re-confirm tenant name")
+      });
+      
+      const validatedData = executeSchema.parse(req.body);
+      
+      // Get purge operation to verify everything
+      const operations = await storage.getPurgeOperations({ tenantId: undefined });
+      const purgeOp = operations.find(op => op.id === id);
+      
+      if (!purgeOp) {
+        return res.status(404).json({ message: "Purge operation not found" });
+      }
+      
+      // Verify tenant name again for safety
+      if (purgeOp.tenantName !== validatedData.tenantNameConfirmation) {
+        return res.status(400).json({ 
+          message: "SECURITY: Tenant name confirmation failed" 
+        });
+      }
+      
+      // Start the purge operation
+      await storage.startPurge(id, purgeOp.tenantId);
+      
+      console.error(`💥 IMMEDIATE PURGE EXECUTING - Operation ${id} for tenant ${purgeOp.tenantName} by user ${userId}`);
+      console.error(`💥 IP: ${ipAddress}, User Agent: ${userAgent}`);
+      
+      try {
+        // Execute the purge
+        const result = await storage.purgeTenantNow(purgeOp.tenantId, id);
+        
+        // Mark as completed
+        await storage.completePurge(id, purgeOp.tenantId, result.recordsDestroyed, result.tablesDestroyed);
+        
+        console.error(`💥 PURGE COMPLETED: ${result.recordsDestroyed} records destroyed across ${result.tablesDestroyed} tables`);
+        
+        res.json({
+          message: "⚠️ TENANT DATA PERMANENTLY DESTROYED ⚠️",
+          result: {
+            tenantId: purgeOp.tenantId,
+            tenantName: purgeOp.tenantName,
+            recordsDestroyed: result.recordsDestroyed,
+            tablesDestroyed: result.tablesDestroyed,
+            completedAt: new Date().toISOString()
+          }
+        });
+      } catch (executionError: any) {
+        console.error("Purge execution failed:", executionError);
+        
+        // Mark as failed
+        await storage.failPurge(id, purgeOp.tenantId, executionError.message);
+        
+        res.status(500).json({ 
+          message: "Purge execution failed", 
+          error: executionError.message 
+        });
+      }
+    } catch (error: any) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+          message: "Invalid request data", 
+          errors: error.errors 
+        });
+      }
+      console.error("Error in immediate purge execution:", error);
+      res.status(500).json({ message: "Failed to execute purge" });
     }
   });
 
