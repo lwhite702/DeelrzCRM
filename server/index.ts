@@ -10,8 +10,15 @@ import fs from "fs";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { storage } from "./storage";
+import { tenants, purgeOperations } from "@shared/schema";
+import { eq, and, or } from "drizzle-orm";
+import { db } from "./db";
 
 const app = express();
+
+// Module-scoped variables for background jobs to prevent duplicates
+let inactivityInterval: NodeJS.Timeout | null = null;
+let inactivityEnforcerStarted = false;
 
 // Trust proxy for accurate client IPs
 app.set('trust proxy', 1);
@@ -506,7 +513,7 @@ app.use((req, res, next) => {
           log(`PURGE SCHEDULER: Processed ${processedPurges.length} purge operations`);
         }
 
-        log(`PURGE SCHEDULER: Completed processing ${readyPurges.length} scheduled purges`);
+        log(`PURGE SCHEDULER: Completed purge scheduler run`);
       } catch (error) {
         console.error('PURGE SCHEDULER: Critical error during scheduler run:', error);
         // Don't stop the scheduler, just log and continue
@@ -540,6 +547,277 @@ app.use((req, res, next) => {
 
   // Start the purge scheduler job
   startPurgeScheduler();
+
+  // Inactivity Policy Enforcement Job
+  const startInactivityEnforcer = () => {
+    // Prevent multiple intervals from being created
+    if (inactivityEnforcerStarted) {
+      log('INACTIVITY ENFORCER: Already started, skipping duplicate initialization');
+      return;
+    }
+    inactivityEnforcerStarted = true;
+    
+    const runInactivityEnforcer = async () => {
+      try {
+        log('INACTIVITY ENFORCER: Starting policy enforcement run');
+        
+        // Get global flags for warn-only mode (but don't gate enforcement)
+        const globalFlags = await storage.getFeatureFlags();
+        const warnOnlyFlag = globalFlags.find(f => f.key === 'inactivity_auto_delete_warn_only');
+        const globalWarnOnlyMode = warnOnlyFlag?.defaultEnabled || false;
+        
+        log(`INACTIVITY ENFORCER: Global warn-only mode: ${globalWarnOnlyMode}`);
+
+        // Get all active tenants - always iterate to check per-tenant flags
+        const activeTenants = await db.select({ 
+          id: tenants.id, 
+          name: tenants.name 
+        }).from(tenants).where(eq(tenants.status, "active"));
+
+        if (!activeTenants || activeTenants.length === 0) {
+          log('INACTIVITY ENFORCER: No active tenants found');
+          return;
+        }
+
+        for (const tenant of activeTenants) {
+          try {
+            // Check tenant-specific feature flags
+            const tenantFlags = await storage.getTenantFeatureFlags(tenant.id);
+            
+            if (!tenantFlags.inactivity_auto_delete) {
+              log(`INACTIVITY ENFORCER: Skipping tenant ${tenant.name} - feature disabled`);
+              continue;
+            }
+
+            const tenantWarnOnly = tenantFlags.inactivity_auto_delete_warn_only || globalWarnOnlyMode;
+
+            // Skip tenants with active purge operations
+            const activePurges = await db
+              .select({ id: purgeOperations.id })
+              .from(purgeOperations)
+              .where(
+                and(
+                  eq(purgeOperations.tenantId, tenant.id),
+                  or(
+                    eq(purgeOperations.status, "pending"),
+                    eq(purgeOperations.status, "running")
+                  )
+                )
+              )
+              .limit(1);
+
+            if (activePurges.length > 0) {
+              log(`INACTIVITY ENFORCER: Skipping tenant ${tenant.name} - active purge operation`);
+              continue;
+            }
+
+            // Aggregate activity events first
+            await storage.aggregateActivityEvents(tenant.id);
+
+            // Get inactivity policies for this tenant
+            const policies = await storage.getInactivityPolicies(tenant.id);
+            
+            if (policies.length === 0) {
+              log(`INACTIVITY ENFORCER: No policies configured for tenant ${tenant.name}`);
+              continue;
+            }
+
+            log(`INACTIVITY ENFORCER: Processing ${policies.length} policies for tenant ${tenant.name}`);
+
+            // Process each policy
+            for (const policy of policies) {
+              if (!policy.isEnabled) {
+                continue;
+              }
+
+              // Get overdue trackers for this policy's target
+              const overdueTrackers = await storage.getInactivityTrackers(tenant.id, {
+                targetTable: policy.target === "all" ? undefined : policy.target,
+                overdue: true,
+              });
+
+              log(`INACTIVITY ENFORCER: Found ${overdueTrackers.length} overdue trackers for policy ${policy.target}`);
+
+              for (const tracker of overdueTrackers) {
+                try {
+                  const daysSinceActivity = Math.floor(
+                    (Date.now() - tracker.lastActivity.getTime()) / (1000 * 60 * 60 * 24)
+                  );
+
+                  // Determine next action based on policy and current stage
+                  let nextAction: string | null = null;
+                  let shouldTrigger = false;
+
+                  switch (tracker.stage) {
+                    case "active":
+                      if (daysSinceActivity >= policy.inactivityDays) {
+                        nextAction = policy.action; // warn, arm, or delete
+                        shouldTrigger = true;
+                      }
+                      break;
+                    
+                    case "warned":
+                      if (tracker.warnedAt) {
+                        const daysSinceWarned = Math.floor(
+                          (Date.now() - tracker.warnedAt.getTime()) / (1000 * 60 * 60 * 24)
+                        );
+                        if (daysSinceWarned >= policy.gracePeriodDays) {
+                          nextAction = policy.action === "warn" ? "arm" : policy.action; // escalate
+                          shouldTrigger = true;
+                        }
+                      }
+                      break;
+                    
+                    case "armed":
+                      if (tracker.armedAt && policy.action === "delete" && !tenantWarnOnly) {
+                        const daysSinceArmed = Math.floor(
+                          (Date.now() - tracker.armedAt.getTime()) / (1000 * 60 * 60 * 24)
+                        );
+                        if (daysSinceArmed >= policy.gracePeriodDays) {
+                          nextAction = "delete";
+                          shouldTrigger = true;
+                        }
+                      }
+                      break;
+                  }
+
+                  if (!shouldTrigger || !nextAction) {
+                    continue;
+                  }
+
+                  // Skip deletion if in warn-only mode
+                  if (tenantWarnOnly && nextAction === "delete") {
+                    log(`INACTIVITY ENFORCER: Skipping deletion for ${tracker.targetTable}:${tracker.targetId} - warn-only mode`);
+                    continue;
+                  }
+
+                  log(`INACTIVITY ENFORCER: Executing ${nextAction} for ${tracker.targetTable}:${tracker.targetId} (${daysSinceActivity} days inactive)`);
+
+                  // Execute the action
+                  switch (nextAction) {
+                    case "warn":
+                      await storage.updateInactivityTracker(tracker.id, {
+                        stage: "warned",
+                        warnedAt: new Date(),
+                        nextCheck: new Date(Date.now() + (policy.gracePeriodDays * 24 * 60 * 60 * 1000)),
+                      });
+
+                      await storage.createAuditLog({
+                        tenantId: tenant.id,
+                        targetTable: tracker.targetTable,
+                        targetId: tracker.targetId,
+                        action: "inactivity_warn",
+                        actor: "system",
+                        before: { stage: tracker.stage },
+                        after: { stage: "warned", daysInactive: daysSinceActivity },
+                        metadata: { policyId: policy.id, trackerId: tracker.id },
+                      });
+                      break;
+
+                    case "arm":
+                      // Use existing self-destruct system
+                      await storage.armSelfDestruct({
+                        tenantId: tenant.id,
+                        targetTable: tracker.targetTable,
+                        targetId: tracker.targetId,
+                        armedBy: "system",
+                        reason: `Inactivity policy: ${daysSinceActivity} days inactive`,
+                        destructAt: new Date(Date.now() + (policy.gracePeriodDays * 24 * 60 * 60 * 1000)),
+                        metadata: { policyId: policy.id, trackerId: tracker.id },
+                      });
+
+                      await storage.updateInactivityTracker(tracker.id, {
+                        stage: "armed",
+                        armedAt: new Date(),
+                        nextCheck: new Date(Date.now() + (policy.gracePeriodDays * 24 * 60 * 60 * 1000)),
+                      });
+
+                      await storage.createAuditLog({
+                        tenantId: tenant.id,
+                        targetTable: tracker.targetTable,
+                        targetId: tracker.targetId,
+                        action: "inactivity_arm",
+                        actor: "system",
+                        before: { stage: tracker.stage },
+                        after: { stage: "armed", daysInactive: daysSinceActivity },
+                        metadata: { policyId: policy.id, trackerId: tracker.id },
+                      });
+                      break;
+
+                    case "delete":
+                      // Use existing self-destruct destroy method
+                      await storage.destroyNowSystem(tracker.targetId, tenant.id, 
+                        `Inactivity policy: ${daysSinceActivity} days inactive`);
+
+                      await storage.updateInactivityTracker(tracker.id, {
+                        stage: "deleted",
+                        nextCheck: null,
+                      });
+
+                      await storage.createAuditLog({
+                        tenantId: tenant.id,
+                        targetTable: tracker.targetTable,
+                        targetId: tracker.targetId,
+                        action: "inactivity_delete",
+                        actor: "system",
+                        before: { stage: tracker.stage },
+                        after: { stage: "deleted", daysInactive: daysSinceActivity },
+                        metadata: { policyId: policy.id, trackerId: tracker.id },
+                      });
+                      break;
+                  }
+
+                  // Small delay between actions to prevent overwhelming the system
+                  await new Promise(resolve => setTimeout(resolve, 100));
+
+                } catch (trackerError) {
+                  console.error(`INACTIVITY ENFORCER: Error processing tracker ${tracker.id}:`, trackerError);
+                }
+              }
+            }
+
+            log(`INACTIVITY ENFORCER: Completed processing tenant ${tenant.name}`);
+
+          } catch (tenantError) {
+            console.error(`INACTIVITY ENFORCER: Error processing tenant ${tenant.name}:`, tenantError);
+          }
+        }
+
+        log('INACTIVITY ENFORCER: Policy enforcement run completed');
+
+      } catch (error) {
+        console.error('INACTIVITY ENFORCER: Critical error during enforcement run:', error);
+        // Don't stop the enforcer, just log and continue
+      }
+    };
+
+    // Run enforcer after a 2-minute delay to let system settle
+    setTimeout(() => {
+      runInactivityEnforcer();
+    }, 120000);
+
+    // Then run every 4 hours for regular enforcement
+    inactivityInterval = setInterval(runInactivityEnforcer, 4 * 60 * 60 * 1000);
+
+    log('📅 INACTIVITY ENFORCER: Background job started (4-hour intervals)');
+
+    // Graceful shutdown handling
+    const stopInactivityEnforcer = () => {
+      if (inactivityInterval) {
+        clearInterval(inactivityInterval);
+        log('INACTIVITY ENFORCER: Background job stopped');
+      }
+    };
+
+    process.on('SIGTERM', stopInactivityEnforcer);
+    process.on('SIGINT', stopInactivityEnforcer);
+    process.on('exit', stopInactivityEnforcer);
+
+    return stopInactivityEnforcer;
+  };
+
+  // Start the inactivity enforcer job
+  startInactivityEnforcer();
 
   // ALWAYS serve the app on the port specified in the environment variable PORT
   // Other ports are firewalled. Default to 5000 if not specified.

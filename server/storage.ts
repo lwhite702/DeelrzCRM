@@ -60,6 +60,15 @@ import {
   purgeOperations,
   type PurgeOperation,
   type InsertPurgeOperation,
+  inactivityPolicies,
+  type InactivityPolicy,
+  type InsertInactivityPolicy,
+  inactivityTrackers,
+  type InactivityTracker,
+  type InsertInactivityTracker,
+  activityEvents,
+  type ActivityEvent,
+  type InsertActivityEvent,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, sql, or, like, ilike, isNull } from "drizzle-orm";
@@ -245,6 +254,37 @@ export interface IStorage {
   getAuditLogs(tenantId: string, filters?: { targetTable?: string; targetId?: string; action?: string }): Promise<Array<AuditLog & {
     actorName?: string;
   }>>;
+  
+  // Activity Tracking System
+  recordActivity(data: {
+    tenantId: string;
+    targetTable: string;
+    targetId: string;
+    eventType: string;
+    userId?: string;
+    metadata?: any;
+  }): Promise<void>;
+  
+  // Inactivity Policy Management
+  getInactivityPolicies(tenantId?: string): Promise<InactivityPolicy[]>;
+  createInactivityPolicy(policy: InsertInactivityPolicy): Promise<InactivityPolicy>;
+  updateInactivityPolicy(id: string, policy: Partial<InsertInactivityPolicy>): Promise<InactivityPolicy>;
+  deleteInactivityPolicy(id: string): Promise<void>;
+  
+  // Inactivity Tracker Management
+  getInactivityTrackers(tenantId: string, filters?: { 
+    stage?: string; 
+    targetTable?: string; 
+    overdue?: boolean; 
+  }): Promise<InactivityTracker[]>;
+  createInactivityTracker(tracker: InsertInactivityTracker): Promise<InactivityTracker>;
+  updateInactivityTracker(id: string, tracker: Partial<InsertInactivityTracker>): Promise<InactivityTracker>;
+  deleteInactivityTracker(id: string): Promise<void>;
+  restoreInactivityTracker(id: string, tenantId: string, userId: string): Promise<InactivityTracker>;
+  snoozeInactivityTracker(id: string, tenantId: string, snoozeDays: number, userId: string): Promise<InactivityTracker>;
+  
+  // Activity aggregation and tracker updates
+  aggregateActivityEvents(tenantId: string): Promise<void>;
   
   // Danger Purge Operations - EXTREMELY SENSITIVE
   requestPurge(data: {
@@ -2529,6 +2569,21 @@ X-RateLimit-Reset: 1642284000
           description: 'Enable self-destructible content system for enhanced data security. Allows armed content to be automatically destroyed based on TTL.',
           defaultEnabled: false, // Default to false for security and controlled rollout
         },
+        {
+          key: 'inactivity_auto_delete',
+          description: 'Enable inactivity-based auto-deletion policy system. Automatically warns, arms, or deletes inactive tenant data based on configurable policies.',
+          defaultEnabled: false, // Default to false for controlled rollout and safety
+        },
+        {
+          key: 'inactivity_auto_delete_warn_only',
+          description: 'When enabled, inactivity system will only warn and arm records without performing actual deletions. Safety override for testing and gradual rollout.',
+          defaultEnabled: true, // Default to true for maximum safety during rollout
+        },
+        {
+          key: 'inactivity_activity_tracking',
+          description: 'Enable activity tracking for inactivity policy system. Required for inactivity detection but can be independently controlled.',
+          defaultEnabled: true, // Default to true as it\'s safe and required for the system
+        },
       ];
 
       // Insert all feature flags
@@ -3762,6 +3817,309 @@ X-RateLimit-Reset: 1642284000
       }>;
     } catch (error) {
       console.error("Failed to get purge operations:", error);
+      throw error;
+    }
+  }
+
+  // Activity Tracking System
+  async recordActivity(data: {
+    tenantId: string;
+    targetTable: string;
+    targetId: string;
+    eventType: string;
+    userId?: string;
+    metadata?: any;
+  }): Promise<void> {
+    try {
+      await db.insert(activityEvents).values({
+        tenantId: data.tenantId,
+        targetTable: data.targetTable,
+        targetId: data.targetId,
+        eventType: data.eventType,
+        userId: data.userId,
+        metadata: data.metadata,
+      });
+    } catch (error) {
+      console.error("Failed to record activity:", error);
+      // Don't throw - activity tracking should not break core functionality
+    }
+  }
+
+  // Inactivity Policy Management
+  async getInactivityPolicies(tenantId?: string): Promise<InactivityPolicy[]> {
+    let query = db.select().from(inactivityPolicies);
+    
+    if (tenantId) {
+      query = query.where(
+        or(
+          eq(inactivityPolicies.tenantId, tenantId),
+          isNull(inactivityPolicies.tenantId) // Include global policies
+        )
+      );
+    } else {
+      query = query.where(isNull(inactivityPolicies.tenantId)); // Only global policies
+    }
+    
+    return await query.orderBy(
+      inactivityPolicies.tenantId, // NULL first (globals)
+      inactivityPolicies.target
+    );
+  }
+
+  async createInactivityPolicy(policy: InsertInactivityPolicy): Promise<InactivityPolicy> {
+    const [created] = await db.insert(inactivityPolicies)
+      .values(policy)
+      .returning();
+    return created;
+  }
+
+  async updateInactivityPolicy(id: string, policy: Partial<InsertInactivityPolicy>): Promise<InactivityPolicy> {
+    const [updated] = await db.update(inactivityPolicies)
+      .set({
+        ...policy,
+        updatedAt: new Date(),
+      })
+      .where(eq(inactivityPolicies.id, id))
+      .returning();
+      
+    if (!updated) {
+      throw new Error("Inactivity policy not found");
+    }
+    
+    return updated;
+  }
+
+  async deleteInactivityPolicy(id: string): Promise<void> {
+    const result = await db.delete(inactivityPolicies)
+      .where(eq(inactivityPolicies.id, id));
+      
+    if (result.rowCount === 0) {
+      throw new Error("Inactivity policy not found");
+    }
+  }
+
+  // Inactivity Tracker Management
+  async getInactivityTrackers(tenantId: string, filters?: { 
+    stage?: string; 
+    targetTable?: string; 
+    overdue?: boolean; 
+  }): Promise<InactivityTracker[]> {
+    let query = db.select().from(inactivityTrackers)
+      .where(eq(inactivityTrackers.tenantId, tenantId));
+    
+    if (filters?.stage) {
+      query = query.where(
+        and(
+          eq(inactivityTrackers.tenantId, tenantId),
+          eq(inactivityTrackers.stage, filters.stage as any)
+        )
+      );
+    }
+    
+    if (filters?.targetTable) {
+      query = query.where(
+        and(
+          eq(inactivityTrackers.tenantId, tenantId),
+          eq(inactivityTrackers.targetTable, filters.targetTable)
+        )
+      );
+    }
+    
+    if (filters?.overdue) {
+      query = query.where(
+        and(
+          eq(inactivityTrackers.tenantId, tenantId),
+          sql`${inactivityTrackers.nextCheck} <= NOW()`
+        )
+      );
+    }
+    
+    return await query.orderBy(
+      inactivityTrackers.lastActivity,
+      inactivityTrackers.stage
+    );
+  }
+
+  async createInactivityTracker(tracker: InsertInactivityTracker): Promise<InactivityTracker> {
+    const [created] = await db.insert(inactivityTrackers)
+      .values(tracker)
+      .returning();
+    return created;
+  }
+
+  async updateInactivityTracker(id: string, tracker: Partial<InsertInactivityTracker>): Promise<InactivityTracker> {
+    const [updated] = await db.update(inactivityTrackers)
+      .set({
+        ...tracker,
+        updatedAt: new Date(),
+      })
+      .where(eq(inactivityTrackers.id, id))
+      .returning();
+      
+    if (!updated) {
+      throw new Error("Inactivity tracker not found");
+    }
+    
+    return updated;
+  }
+
+  async deleteInactivityTracker(id: string): Promise<void> {
+    const result = await db.delete(inactivityTrackers)
+      .where(eq(inactivityTrackers.id, id));
+      
+    if (result.rowCount === 0) {
+      throw new Error("Inactivity tracker not found");
+    }
+  }
+
+  async restoreInactivityTracker(id: string, tenantId: string, userId: string): Promise<InactivityTracker> {
+    return await db.transaction(async (tx) => {
+      // Update tracker back to active stage
+      const [updated] = await tx.update(inactivityTrackers)
+        .set({
+          stage: "active",
+          lastActivity: new Date(), // Reset activity timestamp
+          warnedAt: null,
+          armedAt: null,
+          snoozedUntil: null,
+          nextCheck: null,
+          updatedAt: new Date(),
+          metadata: sql`jsonb_set(COALESCE(${inactivityTrackers.metadata}, '{}'), '{restored}', 'true')`,
+        })
+        .where(
+          and(
+            eq(inactivityTrackers.id, id),
+            eq(inactivityTrackers.tenantId, tenantId)
+          )
+        )
+        .returning();
+
+      if (!updated) {
+        throw new Error("Inactivity tracker not found");
+      }
+
+      // Create audit log
+      await tx.insert(auditLogs).values({
+        tenantId: tenantId,
+        targetTable: updated.targetTable,
+        targetId: updated.targetId,
+        action: "inactivity_restore",
+        actor: userId,
+        before: { stage: "warned/armed" },
+        after: { stage: "active", restoredBy: userId },
+        metadata: { trackerId: id },
+      });
+
+      return updated;
+    });
+  }
+
+  async snoozeInactivityTracker(id: string, tenantId: string, snoozeDays: number, userId: string): Promise<InactivityTracker> {
+    return await db.transaction(async (tx) => {
+      const snoozeUntil = new Date();
+      snoozeUntil.setDate(snoozeUntil.getDate() + snoozeDays);
+
+      const [updated] = await tx.update(inactivityTrackers)
+        .set({
+          snoozedUntil: snoozeUntil,
+          nextCheck: snoozeUntil,
+          updatedAt: new Date(),
+          metadata: sql`jsonb_set(COALESCE(${inactivityTrackers.metadata}, '{}'), '{snoozedDays}', '${snoozeDays}')`,
+        })
+        .where(
+          and(
+            eq(inactivityTrackers.id, id),
+            eq(inactivityTrackers.tenantId, tenantId)
+          )
+        )
+        .returning();
+
+      if (!updated) {
+        throw new Error("Inactivity tracker not found");
+      }
+
+      // Create audit log
+      await tx.insert(auditLogs).values({
+        tenantId: tenantId,
+        targetTable: updated.targetTable,
+        targetId: updated.targetId,
+        action: "inactivity_snooze",
+        actor: userId,
+        before: { snoozedUntil: null },
+        after: { snoozedUntil: snoozeUntil, snoozedBy: userId, snoozeDays },
+        metadata: { trackerId: id },
+      });
+
+      return updated;
+    });
+  }
+
+  // Activity aggregation and tracker updates
+  async aggregateActivityEvents(tenantId: string): Promise<void> {
+    try {
+      // Get latest activity per target from activity_events
+      const latestActivities = await db
+        .select({
+          targetTable: activityEvents.targetTable,
+          targetId: activityEvents.targetId,
+          latestActivity: sql<Date>`MAX(${activityEvents.createdAt})`,
+        })
+        .from(activityEvents)
+        .where(eq(activityEvents.tenantId, tenantId))
+        .groupBy(activityEvents.targetTable, activityEvents.targetId);
+
+      // Update existing trackers with latest activity
+      for (const activity of latestActivities) {
+        await db
+          .update(inactivityTrackers)
+          .set({
+            lastActivity: activity.latestActivity,
+            updatedAt: new Date(),
+            // Reset to active if was warned/armed but now has activity
+            stage: sql`CASE WHEN ${inactivityTrackers.stage} IN ('warned', 'armed') THEN 'active' ELSE ${inactivityTrackers.stage} END`,
+            warnedAt: sql`CASE WHEN ${inactivityTrackers.stage} IN ('warned', 'armed') THEN NULL ELSE ${inactivityTrackers.warnedAt} END`,
+            armedAt: sql`CASE WHEN ${inactivityTrackers.stage} IN ('warned', 'armed') THEN NULL ELSE ${inactivityTrackers.armedAt} END`,
+          })
+          .where(
+            and(
+              eq(inactivityTrackers.tenantId, tenantId),
+              eq(inactivityTrackers.targetTable, activity.targetTable),
+              eq(inactivityTrackers.targetId, activity.targetId),
+              sql`${inactivityTrackers.lastActivity} < ${activity.latestActivity}`
+            )
+          );
+      }
+
+      // Create new trackers for targets that don't have them yet
+      for (const activity of latestActivities) {
+        await db
+          .insert(inactivityTrackers)
+          .values({
+            tenantId: tenantId,
+            targetTable: activity.targetTable,
+            targetId: activity.targetId,
+            stage: "active",
+            lastActivity: activity.latestActivity,
+          })
+          .onConflictDoNothing(); // Use unique constraint to prevent duplicates
+      }
+
+      // Clean up old activity events (keep last 30 days)
+      const cleanupDate = new Date();
+      cleanupDate.setDate(cleanupDate.getDate() - 30);
+      
+      await db
+        .delete(activityEvents)
+        .where(
+          and(
+            eq(activityEvents.tenantId, tenantId),
+            sql`${activityEvents.createdAt} < ${cleanupDate}`
+          )
+        );
+
+      console.log(`Activity aggregation completed for tenant ${tenantId}`);
+    } catch (error) {
+      console.error(`Failed to aggregate activity events for tenant ${tenantId}:`, error);
       throw error;
     }
   }

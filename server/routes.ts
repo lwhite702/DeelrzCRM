@@ -25,6 +25,9 @@ import {
   insertSelfDestructSchema,
   insertAuditLogSchema,
   insertPurgeOperationSchema,
+  insertInactivityPolicySchema,
+  insertInactivityTrackerSchema,
+  insertActivityEventSchema,
   batches,
   products,
   payments,
@@ -2626,6 +2629,428 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       console.error("Error in immediate purge execution:", error);
       res.status(500).json({ message: "Failed to execute purge" });
+    }
+  });
+
+  // ===== INACTIVITY AUTO-DELETION POLICY SYSTEM API ROUTES =====
+
+  // Feature flag middleware for inactivity system
+  const requireInactivityFeatureFlag = async (req: any, res: any, next: any) => {
+    try {
+      const globalFlags = await storage.getFeatureFlags();
+      const inactivityFlag = globalFlags.find(f => f.key === 'inactivity_auto_delete');
+      
+      // Check if globally enabled first
+      if (inactivityFlag?.defaultEnabled) {
+        return next();
+      }
+      
+      // If not globally enabled, check if any tenant has it enabled via overrides
+      // This allows super admins to manage policies for tenants that have enabled it
+      const { tenantId } = req.query;
+      if (tenantId && typeof tenantId === 'string') {
+        const tenantFlags = await storage.getTenantFeatureFlags(tenantId);
+        if (tenantFlags.inactivity_auto_delete) {
+          return next();
+        }
+      }
+      
+      // Check if user is super admin - they should be able to view/manage all policies
+      const userId = req.user.claims.sub;
+      const userTenants = await storage.getUserTenants(userId);
+      const isSuperAdmin = userTenants.some(ut => ut.role === "super_admin");
+      
+      if (isSuperAdmin) {
+        return next(); // Super admins can always manage inactivity policies
+      }
+      
+      return res.status(403).json({ 
+        message: "Access denied: Inactivity auto-deletion feature is not enabled globally or for the specified tenant" 
+      });
+      
+    } catch (error) {
+      console.error("Error checking inactivity feature flag:", error);
+      res.status(500).json({ message: "Failed to check feature access" });
+    }
+  };
+
+  // GET /api/admin/inactivity/policies - List all inactivity policies
+  app.get("/api/admin/inactivity/policies", isAuthenticated, requireSuperAdmin, requireInactivityFeatureFlag, async (req: any, res) => {
+    try {
+      const { tenantId } = req.query;
+      
+      const policies = await storage.getInactivityPolicies(
+        tenantId && typeof tenantId === 'string' ? tenantId : undefined
+      );
+      
+      res.json({
+        policies: policies.map(policy => ({
+          id: policy.id,
+          tenantId: policy.tenantId,
+          target: policy.target,
+          inactivityDays: policy.inactivityDays,
+          action: policy.action,
+          gracePeriodDays: policy.gracePeriodDays,
+          isEnabled: policy.isEnabled,
+          createdAt: policy.createdAt,
+          updatedAt: policy.updatedAt,
+          createdBy: policy.createdBy,
+          metadata: policy.metadata,
+        })),
+        totalCount: policies.length,
+      });
+    } catch (error) {
+      console.error("Error fetching inactivity policies:", error);
+      res.status(500).json({ message: "Failed to fetch inactivity policies" });
+    }
+  });
+
+  // POST /api/admin/inactivity/policies - Create inactivity policy
+  app.post("/api/admin/inactivity/policies", isAuthenticated, requireSuperAdmin, requireInactivityFeatureFlag, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const policyData = insertInactivityPolicySchema.parse({
+        ...req.body,
+        createdBy: userId,
+      });
+
+      const policy = await storage.createInactivityPolicy(policyData);
+      
+      // Audit log
+      await storage.createAuditLog({
+        tenantId: policy.tenantId || "global",
+        targetTable: "inactivity_policies",
+        targetId: policy.id,
+        action: "create",
+        actor: userId,
+        before: null,
+        after: {
+          target: policy.target,
+          inactivityDays: policy.inactivityDays,
+          action: policy.action,
+          gracePeriodDays: policy.gracePeriodDays,
+          isEnabled: policy.isEnabled,
+        },
+        metadata: { policyType: "inactivity" },
+      });
+
+      res.status(201).json({
+        message: "Inactivity policy created successfully",
+        policy,
+      });
+    } catch (error: any) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: "Invalid policy data",
+          errors: error.errors,
+        });
+      }
+      console.error("Error creating inactivity policy:", error);
+      res.status(500).json({ message: "Failed to create inactivity policy" });
+    }
+  });
+
+  // PUT /api/admin/inactivity/policies/:id - Update inactivity policy
+  app.put("/api/admin/inactivity/policies/:id", isAuthenticated, requireSuperAdmin, requireInactivityFeatureFlag, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user.claims.sub;
+      
+      // Get existing policy for audit logging
+      const existingPolicies = await storage.getInactivityPolicies();
+      const existingPolicy = existingPolicies.find(p => p.id === id);
+      
+      if (!existingPolicy) {
+        return res.status(404).json({ message: "Inactivity policy not found" });
+      }
+
+      const updateData = insertInactivityPolicySchema.partial().parse(req.body);
+      const policy = await storage.updateInactivityPolicy(id, updateData);
+
+      // Audit log
+      await storage.createAuditLog({
+        tenantId: policy.tenantId || "global",
+        targetTable: "inactivity_policies",
+        targetId: policy.id,
+        action: "update",
+        actor: userId,
+        before: {
+          target: existingPolicy.target,
+          inactivityDays: existingPolicy.inactivityDays,
+          action: existingPolicy.action,
+          gracePeriodDays: existingPolicy.gracePeriodDays,
+          isEnabled: existingPolicy.isEnabled,
+        },
+        after: {
+          target: policy.target,
+          inactivityDays: policy.inactivityDays,
+          action: policy.action,
+          gracePeriodDays: policy.gracePeriodDays,
+          isEnabled: policy.isEnabled,
+        },
+        metadata: { policyType: "inactivity" },
+      });
+
+      res.json({
+        message: "Inactivity policy updated successfully",
+        policy,
+      });
+    } catch (error: any) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: "Invalid policy data",
+          errors: error.errors,
+        });
+      }
+      console.error("Error updating inactivity policy:", error);
+      res.status(500).json({ message: "Failed to update inactivity policy" });
+    }
+  });
+
+  // DELETE /api/admin/inactivity/policies/:id - Delete inactivity policy
+  app.delete("/api/admin/inactivity/policies/:id", isAuthenticated, requireSuperAdmin, requireInactivityFeatureFlag, async (req: any, res) => {
+    try {
+      const { id } = req.params;
+      const userId = req.user.claims.sub;
+      
+      // Get existing policy for audit logging
+      const existingPolicies = await storage.getInactivityPolicies();
+      const existingPolicy = existingPolicies.find(p => p.id === id);
+      
+      if (!existingPolicy) {
+        return res.status(404).json({ message: "Inactivity policy not found" });
+      }
+
+      await storage.deleteInactivityPolicy(id);
+
+      // Audit log
+      await storage.createAuditLog({
+        tenantId: existingPolicy.tenantId || "global",
+        targetTable: "inactivity_policies",
+        targetId: id,
+        action: "delete",
+        actor: userId,
+        before: {
+          target: existingPolicy.target,
+          inactivityDays: existingPolicy.inactivityDays,
+          action: existingPolicy.action,
+          gracePeriodDays: existingPolicy.gracePeriodDays,
+          isEnabled: existingPolicy.isEnabled,
+        },
+        after: null,
+        metadata: { policyType: "inactivity" },
+      });
+
+      res.json({ message: "Inactivity policy deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting inactivity policy:", error);
+      res.status(500).json({ message: "Failed to delete inactivity policy" });
+    }
+  });
+
+  // GET /api/tenants/:tenantId/inactivity/trackers - Get inactivity trackers for tenant
+  tenantRouter.get("/inactivity/trackers", async (req: any, res) => {
+    try {
+      const { tenantId } = req.params;
+      const { stage, targetTable, overdue } = req.query;
+      
+      const filters: any = {};
+      if (stage && typeof stage === 'string') filters.stage = stage;
+      if (targetTable && typeof targetTable === 'string') filters.targetTable = targetTable;
+      if (overdue === 'true') filters.overdue = true;
+
+      const trackers = await storage.getInactivityTrackers(tenantId, filters);
+      
+      res.json({
+        trackers: trackers.map(tracker => ({
+          id: tracker.id,
+          targetTable: tracker.targetTable,
+          targetId: tracker.targetId,
+          stage: tracker.stage,
+          lastActivity: tracker.lastActivity,
+          warnedAt: tracker.warnedAt,
+          armedAt: tracker.armedAt,
+          snoozedUntil: tracker.snoozedUntil,
+          nextCheck: tracker.nextCheck,
+          createdAt: tracker.createdAt,
+          updatedAt: tracker.updatedAt,
+          metadata: tracker.metadata,
+        })),
+        totalCount: trackers.length,
+      });
+    } catch (error) {
+      console.error("Error fetching inactivity trackers:", error);
+      res.status(500).json({ message: "Failed to fetch inactivity trackers" });
+    }
+  });
+
+  // POST /api/tenants/:tenantId/inactivity/trackers/:trackerId/restore - Restore tracker
+  tenantRouter.post("/inactivity/trackers/:trackerId/restore", requireOwnerOrSuperAdmin, async (req: any, res) => {
+    try {
+      const { tenantId, trackerId } = req.params;
+      const userId = req.user.claims.sub;
+
+      const tracker = await storage.restoreInactivityTracker(trackerId, tenantId, userId);
+
+      res.json({
+        message: "Item restored from inactivity deletion successfully",
+        tracker: {
+          id: tracker.id,
+          targetTable: tracker.targetTable,
+          targetId: tracker.targetId,
+          stage: tracker.stage,
+          lastActivity: tracker.lastActivity,
+          updatedAt: tracker.updatedAt,
+        },
+      });
+    } catch (error: any) {
+      if (error.message === "Inactivity tracker not found") {
+        return res.status(404).json({ message: "Tracker not found" });
+      }
+      console.error("Error restoring inactivity tracker:", error);
+      res.status(500).json({ message: "Failed to restore item" });
+    }
+  });
+
+  // POST /api/tenants/:tenantId/inactivity/trackers/:trackerId/snooze - Snooze tracker
+  tenantRouter.post("/inactivity/trackers/:trackerId/snooze", requireOwnerOrSuperAdmin, async (req: any, res) => {
+    try {
+      const { tenantId, trackerId } = req.params;
+      const userId = req.user.claims.sub;
+      
+      const snoozeSchema = z.object({
+        snoozeDays: z.number().min(1).max(90), // 1 to 90 days
+      });
+
+      const { snoozeDays } = snoozeSchema.parse(req.body);
+
+      const tracker = await storage.snoozeInactivityTracker(trackerId, tenantId, snoozeDays, userId);
+
+      res.json({
+        message: `Item snoozed for ${snoozeDays} days`,
+        tracker: {
+          id: tracker.id,
+          targetTable: tracker.targetTable,
+          targetId: tracker.targetId,
+          stage: tracker.stage,
+          snoozedUntil: tracker.snoozedUntil,
+          nextCheck: tracker.nextCheck,
+          updatedAt: tracker.updatedAt,
+        },
+      });
+    } catch (error: any) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: "Invalid snooze data",
+          errors: error.errors,
+        });
+      }
+      if (error.message === "Inactivity tracker not found") {
+        return res.status(404).json({ message: "Tracker not found" });
+      }
+      console.error("Error snoozing inactivity tracker:", error);
+      res.status(500).json({ message: "Failed to snooze item" });
+    }
+  });
+
+  // GET /api/admin/inactivity/monitor - Monitor inactivity system across all tenants
+  app.get("/api/admin/inactivity/monitor", isAuthenticated, requireSuperAdmin, requireInactivityFeatureFlag, async (req: any, res) => {
+    try {
+      const { stage, tenantId } = req.query;
+      
+      // Get summary statistics
+      let warnedCount = 0;
+      let armedCount = 0;
+      let deletedCount = 0;
+      const tenantSummaries: any[] = [];
+
+      // Get all active tenants
+      const [activeTenants] = await db.select({ 
+        id: tenants.id, 
+        name: tenants.name 
+      }).from(tenants).where(eq(tenants.status, "active"));
+
+      for (const tenant of [activeTenants].flat()) {
+        if (tenantId && tenant.id !== tenantId) continue;
+
+        try {
+          const allTrackers = await storage.getInactivityTrackers(tenant.id);
+          const warnedTrackers = allTrackers.filter(t => t.stage === "warned");
+          const armedTrackers = allTrackers.filter(t => t.stage === "armed");
+          const deletedTrackers = allTrackers.filter(t => t.stage === "deleted");
+
+          warnedCount += warnedTrackers.length;
+          armedCount += armedTrackers.length;
+          deletedCount += deletedTrackers.length;
+
+          tenantSummaries.push({
+            tenantId: tenant.id,
+            tenantName: tenant.name,
+            warnedCount: warnedTrackers.length,
+            armedCount: armedTrackers.length,
+            deletedCount: deletedTrackers.length,
+            totalTrackers: allTrackers.length,
+          });
+        } catch (tenantError) {
+          console.error(`Error getting trackers for tenant ${tenant.name}:`, tenantError);
+        }
+      }
+
+      res.json({
+        summary: {
+          totalWarned: warnedCount,
+          totalArmed: armedCount,
+          totalDeleted: deletedCount,
+          totalTenants: tenantSummaries.length,
+        },
+        tenantBreakdown: tenantSummaries,
+      });
+    } catch (error) {
+      console.error("Error monitoring inactivity system:", error);
+      res.status(500).json({ message: "Failed to monitor inactivity system" });
+    }
+  });
+
+  // POST /api/admin/inactivity/force-run - Force run inactivity enforcer (for testing)
+  app.post("/api/admin/inactivity/force-run", isAuthenticated, requireSuperAdmin, requireInactivityFeatureFlag, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { tenantId } = req.body;
+
+      console.log(`Manual inactivity enforcement triggered by user ${userId}`);
+
+      // Trigger activity aggregation for specific tenant or all
+      if (tenantId) {
+        await storage.aggregateActivityEvents(tenantId);
+      } else {
+        const [activeTenants] = await db.select({ id: tenants.id })
+          .from(tenants).where(eq(tenants.status, "active"));
+        
+        for (const tenant of [activeTenants].flat()) {
+          await storage.aggregateActivityEvents(tenant.id);
+        }
+      }
+
+      // Audit log
+      await storage.createAuditLog({
+        tenantId: tenantId || "global",
+        targetTable: "inactivity_policies",
+        targetId: "system",
+        action: "inactivity_warn", // Using existing enum value
+        actor: userId,
+        before: null,
+        after: { forceRun: true, targetTenant: tenantId },
+        metadata: { actionType: "manual_aggregation" },
+      });
+
+      res.json({
+        message: "Activity aggregation completed successfully",
+        targetTenant: tenantId || "all",
+        triggeredBy: userId,
+      });
+    } catch (error) {
+      console.error("Error in manual inactivity enforcement:", error);
+      res.status(500).json({ message: "Failed to run inactivity enforcement" });
     }
   });
 

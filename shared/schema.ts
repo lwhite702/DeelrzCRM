@@ -59,7 +59,12 @@ export const kbCategoryEnum = pgEnum("kb_category", ["getting_started", "feature
 export const keyStatusEnum = pgEnum("key_status", ["active", "revoked"]);
 export const selfDestructStatusEnum = pgEnum("self_destruct_status", ["armed", "disarmed", "destroyed"]);
 export const purgeStatusEnum = pgEnum("purge_status", ["pending", "running", "finished", "failed", "canceled"]);
-export const auditActionEnum = pgEnum("audit_action", ["create", "update", "delete", "arm_self_destruct", "disarm_self_destruct", "destroy_self_destruct", "sweeper_destroy", "request_purge", "ack_export", "schedule_purge", "cancel_purge", "start_purge", "complete_purge", "fail_purge"]);
+export const auditActionEnum = pgEnum("audit_action", ["create", "update", "delete", "arm_self_destruct", "disarm_self_destruct", "destroy_self_destruct", "sweeper_destroy", "request_purge", "ack_export", "schedule_purge", "cancel_purge", "start_purge", "complete_purge", "fail_purge", "inactivity_warn", "inactivity_arm", "inactivity_delete", "inactivity_restore", "inactivity_snooze"]);
+
+// Inactivity Policy System Enums
+export const inactivityTargetEnum = pgEnum("inactivity_target", ["all", "customers", "products", "orders", "payments", "deliveries", "loyalty_accounts", "credits"]);
+export const inactivityStageEnum = pgEnum("inactivity_stage", ["active", "warned", "armed", "deleted"]);
+export const inactivityActionEnum = pgEnum("inactivity_action", ["warn", "arm", "delete"]);
 
 // Tenants
 export const tenants = pgTable("tenants", {
@@ -506,6 +511,69 @@ export const purgeOperations = pgTable("purge_operations", {
   unique("unique_active_purge_per_tenant").on(table.tenantId, table.status),
 ]);
 
+// Inactivity Policy System Tables
+export const inactivityPolicies = pgTable("inactivity_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").references(() => tenants.id, { onDelete: "cascade" }), // NULL for global defaults
+  target: inactivityTargetEnum("target").notNull(), // What data type this applies to
+  inactivityDays: integer("inactivity_days").notNull(), // Days of inactivity before action
+  action: inactivityActionEnum("action").notNull(), // What to do when triggered
+  gracePeriodDays: integer("grace_period_days").notNull().default(7), // Grace period after warning
+  isEnabled: boolean("is_enabled").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+  createdBy: varchar("created_by").notNull().references(() => users.id),
+  metadata: jsonb("metadata"), // Additional configuration options
+}, (table) => [
+  index("idx_inactivity_policies_tenant").on(table.tenantId),
+  index("idx_inactivity_policies_target").on(table.target),
+  index("idx_inactivity_policies_enabled").on(table.isEnabled),
+  // Ensure unique policy per target per tenant (including global NULL tenant)
+  unique("unique_policy_per_target_per_tenant").on(table.tenantId, table.target),
+]);
+
+export const inactivityTrackers = pgTable("inactivity_trackers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  targetTable: varchar("target_table", { length: 100 }).notNull(), // Which table (e.g., "customers")
+  targetId: varchar("target_id").notNull(), // Which record ID
+  stage: inactivityStageEnum("stage").notNull().default("active"), // Current lifecycle stage
+  lastActivity: timestamp("last_activity").notNull(), // Last recorded activity for this record
+  warnedAt: timestamp("warned_at"), // When warning was sent
+  armedAt: timestamp("armed_at"), // When record was armed for deletion
+  snoozedUntil: timestamp("snoozed_until"), // Temporary snooze (extends grace period)
+  nextCheck: timestamp("next_check"), // When to evaluate this record next (optimization)
+  metadata: jsonb("metadata"), // Additional tracking data
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  index("idx_inactivity_trackers_tenant").on(table.tenantId),
+  index("idx_inactivity_trackers_target").on(table.targetTable, table.targetId),
+  index("idx_inactivity_trackers_stage").on(table.stage),
+  index("idx_inactivity_trackers_last_activity").on(table.lastActivity),
+  index("idx_inactivity_trackers_next_check").on(table.nextCheck),
+  index("idx_inactivity_trackers_warned_at").on(table.warnedAt),
+  index("idx_inactivity_trackers_armed_at").on(table.armedAt),
+  // Ensure unique tracker per target record
+  unique("unique_tracker_per_target").on(table.tenantId, table.targetTable, table.targetId),
+]);
+
+export const activityEvents = pgTable("activity_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  targetTable: varchar("target_table", { length: 100 }).notNull(),
+  targetId: varchar("target_id").notNull(),
+  eventType: varchar("event_type", { length: 50 }).notNull(), // create, update, view, etc.
+  userId: varchar("user_id").references(() => users.id), // Who triggered the activity (NULL for system)
+  createdAt: timestamp("created_at").defaultNow(),
+  metadata: jsonb("metadata"), // Additional event context
+}, (table) => [
+  index("idx_activity_events_tenant").on(table.tenantId),
+  index("idx_activity_events_target").on(table.targetTable, table.targetId),
+  index("idx_activity_events_created").on(table.createdAt),
+  index("idx_activity_events_user").on(table.userId),
+]);
+
 // Relations
 export const usersRelations = relations(users, ({ many, one }) => ({
   usersTenants: many(usersTenants),
@@ -682,6 +750,12 @@ export type AuditLog = typeof auditLogs.$inferSelect;
 export type InsertAuditLog = typeof auditLogs.$inferInsert;
 export type PurgeOperation = typeof purgeOperations.$inferSelect;
 export type InsertPurgeOperation = typeof purgeOperations.$inferInsert;
+export type InactivityPolicy = typeof inactivityPolicies.$inferSelect;
+export type InsertInactivityPolicy = typeof inactivityPolicies.$inferInsert;
+export type InactivityTracker = typeof inactivityTrackers.$inferSelect;
+export type InsertInactivityTracker = typeof inactivityTrackers.$inferInsert;
+export type ActivityEvent = typeof activityEvents.$inferSelect;
+export type InsertActivityEvent = typeof activityEvents.$inferInsert;
 
 // Zod schemas
 export const insertUserSchema = createInsertSchema(users).omit({
@@ -773,4 +847,21 @@ export const insertPurgeOperationSchema = createInsertSchema(purgeOperations).om
   failedAt: true,
   recordsDestroyed: true,
   tablesDestroyed: true,
+});
+
+export const insertInactivityPolicySchema = createInsertSchema(inactivityPolicies).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertInactivityTrackerSchema = createInsertSchema(inactivityTrackers).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertActivityEventSchema = createInsertSchema(activityEvents).omit({
+  id: true,
+  createdAt: true,
 });
